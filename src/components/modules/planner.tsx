@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api } from "@/lib/use-i18n";
+import { driveBatchJob, onBatchFinish, onBatchProgress } from "@/lib/batch-worker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -408,46 +409,52 @@ export function PlannerModule() {
   }, [createdItems]);
 
   // ---- durable background batch (GenerationJob kind=CONTENT_BATCH) ----
-  // step loop: each POST processes exactly ONE item server-side (~one LLM call) and
-  // checkpoints progress in the job row — terminal status ends the loop
-  const runBatchSteps = useCallback(async (run: BatchRun) => {
-    try {
-      for (;;) {
-        const st = await api<{ status: string; done: number; total: number }>(
-          `/api/plans/content/batch-jobs/${run.jobId}/step`,
-          { method: "POST" }
-        );
-        setBatch((prev) => (prev && prev.jobId === run.jobId ? { ...prev, done: st.done, total: st.total || prev.total } : prev));
-        if (st.status !== "PROCESSING") {
-          if (st.status === "COMPLETED") toast.success(t("planner.batchDone", { n: st.done }));
-          else if (st.status === "CANCELLED") {
-            if (st.done > 0) toast.info(t("planner.batchPartial", { n: st.done }));
-            else toast.info(t("planner.batchStopped"));
-          } else {
-            toast.error(t("planner.batchFailed"), { description: t("planner.batchInterrupted") });
-          }
-          break;
-        }
+  // The step loop lives in src/lib/batch-worker.ts (shared claim registry): the Planner
+  // and the global background worker chip drive jobs through the SAME driver, so a job
+  // is never double-stepped in this tab; the server-side claimAt guard covers other tabs.
+  // This module only mirrors state (progress events) and refreshes data (finish events).
+  const batchRef = useRef<BatchRun | null>(null);
+  batchRef.current = batch;
+
+  // progress events from any driver update the in-flight card
+  useEffect(
+    () =>
+      onBatchProgress((runs) => {
+        const cur = batchRef.current;
+        if (!cur) return;
+        const r = runs.find((x) => x.jobId === cur.jobId);
+        if (r) setBatch({ ...r });
+      }),
+    [],
+  );
+
+  const refreshAfterBatch = useCallback(async () => {
+    if (activeBrandId) {
+      try {
+        const content = await api<ContentPlanDto[]>(`/api/plans/content?brandId=${activeBrandId}`);
+        setContentPlans(content);
+      } catch {
+        /* keep the current list — refresh is best-effort */
       }
-    } catch (e) {
-      // network/provider failure mid-loop — the job stays in the DB; the chip lets the user resume
-      toast.error(errMessage(e), { description: t("planner.batchInterrupted") });
-    } finally {
-      setBatch((prev) => (prev && prev.jobId === run.jobId ? null : prev));
-      if (activeBrandId) {
-        try {
-          const content = await api<ContentPlanDto[]>(`/api/plans/content?brandId=${activeBrandId}`);
-          setContentPlans(content);
-        } catch {
-          /* keep the current list — refresh is best-effort */
-        }
-      }
-      refreshResumable();
     }
-  }, [activeBrandId, refreshResumable, t]);
+    refreshResumable();
+  }, [activeBrandId, refreshResumable]);
+
+  // finish events clear the local card + refresh coverage (toasts live in the global chip)
+  useEffect(
+    () =>
+      onBatchFinish((e) => {
+        if (batchRef.current && e.run.jobId === batchRef.current.jobId) {
+          batchRef.current = null;
+          setBatch(null);
+          void refreshAfterBatch();
+        }
+      }),
+    [refreshAfterBatch],
+  );
 
   const startBatchJob = async (cp: ContentPlanDto) => {
-    if (batch) return;
+    if (batchRef.current) return;
     const covered = coveredIndexes(cp);
     const remaining = cp.itemsJson ? parseJson<PlanItem[]>(cp.itemsJson, []).map((_, i) => i).filter((i) => !covered.has(i)) : [];
     if (remaining.length === 0) {
@@ -460,20 +467,25 @@ export function PlannerModule() {
         body: JSON.stringify({ planId: cp.id, indexes: remaining, language: locale }),
       });
       const run: BatchRun = { jobId: res.job.id, planId: cp.id, done: 0, total: remaining.length };
+      batchRef.current = run;
       setBatch(run);
       setResumable((prev) => ({ ...prev, [cp.id]: run })); // visible before the first step returns
-      await runBatchSteps(run);
+      void driveBatchJob(run); // registers in the shared registry; events drive the UI
     } catch (e) {
       toast.error(errMessage(e));
+      batchRef.current = null;
       setBatch(null);
       refreshResumable();
     }
   };
 
   const resumeBatch = async (run: BatchRun) => {
-    if (batch) return;
+    if (batchRef.current) return;
+    batchRef.current = run;
     setBatch(run);
-    await runBatchSteps(run);
+    // if the background chip already drives this job, driveBatchJob no-ops (already
+    // claimed) — progress events still flow, so the card stays live
+    void driveBatchJob(run);
   };
 
   // cancel via the generic jobs API — the running step finishes its item, remaining ones stop
@@ -639,6 +651,11 @@ export function PlannerModule() {
     const batchActive = batch?.planId === cp.id;
     const batchBusy = Boolean(batch);
     const coverage = items.length > 0 ? Math.round(((items.length - remaining.length) / items.length) * 100) : 100;
+    // checkpoint-derived in-flight state: remaining items are processed in ascending
+    // order, so the first `done` of them are already created in THIS run, and the next
+    // one is on the model right now — honest per-item UI instead of a bare counter
+    const inflightDone = batchActive && batch ? new Set(remaining.slice(0, batch.done)) : new Set<number>();
+    const runningIdx = batchActive && batch ? remaining[batch.done] : undefined;
     return (
       <motion.div key={cp.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.04 }}>
         <Card className={`glass rounded-2xl ${batchActive ? "border-[var(--neon)]/50" : ""}`}>
@@ -729,8 +746,10 @@ export function PlannerModule() {
                 {items.map((item, i) => {
                   const key = `${cp.id}:${i}`;
                   const done = covered.has(i);
+                  const freshDone = inflightDone.has(i) && !done;
+                  const running = i === runningIdx;
                   return (
-                    <div key={key} className={`flex flex-col gap-2 rounded-xl border p-3 ${done ? "border-[var(--neon-2)]/35 bg-[var(--neon-2)]/5" : "border-border/60 bg-muted/20"}`}>
+                    <div key={key} className={`flex flex-col gap-2 rounded-xl border p-3 transition-colors ${done || freshDone ? "border-[var(--neon-2)]/35 bg-[var(--neon-2)]/5" : running ? "border-[var(--neon)]/60 bg-[var(--neon)]/5" : "border-border/60 bg-muted/20"}`}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {item.day != null && (
                           <span className="rounded-md px-2 py-0.5 text-[10px] font-bold text-[var(--neon)]" style={{ background: "color-mix(in oklab, var(--neon) 12%, transparent)" }}>
@@ -739,6 +758,21 @@ export function PlannerModule() {
                         )}
                         {item.platform && <span className="rounded border border-border/60 bg-background/40 px-1.5 py-0.5 text-[10px] font-medium">{item.platform}</span>}
                         {item.contentType && <span className="rounded border border-border/60 bg-background/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.contentType}</span>}
+                        {running && (
+                          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-[var(--neon)]/50 px-2 py-0.5 text-[10px] font-semibold text-[var(--neon)]">
+                            <span className="relative flex h-1.5 w-1.5" aria-hidden>
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--neon)] opacity-70" />
+                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[var(--neon)]" />
+                            </span>
+                            {t("planner.itemRunning")}
+                          </span>
+                        )}
+                        {freshDone && (
+                          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--neon-2)]/50 px-2 py-0.5 text-[10px] font-semibold text-[var(--neon-2)]">
+                            <CheckCircle2 className="h-3 w-3" aria-hidden />
+                            {t("planner.itemFresh")}
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm font-medium leading-snug">{item.title ?? `#${i + 1}`}</p>
                       {item.hook && <p className="line-clamp-2 text-xs italic leading-snug text-muted-foreground">“{item.hook}”</p>}

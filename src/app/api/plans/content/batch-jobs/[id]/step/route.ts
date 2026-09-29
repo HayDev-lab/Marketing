@@ -27,12 +27,20 @@ interface BatchInput {
 // GenerationJob.checkpointJson, so the batch survives page reloads and tab closes.
 // Honest degradation: a provider failure on one item still produces that item's draft
 // (from plan data, without AI copy) and the job keeps going.
-export async function POST(_req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, { params }: Params) {
   return handle(async () => {
     const user = await requireUser();
     const { id } = await params;
     const job = await jobs.getForUser(id, user.id);
     if (job.kind !== "CONTENT_BATCH") throw new ApiError(400, "BAD_KIND", "Not a batch job");
+
+    // claim token: each driver (planner loop, background chip, another tab) proves
+    // ownership on EVERY step — the same token renews the claim, a different token
+    // within the freshness window gets BUSY, and a crashed driver's claim expires
+    // after 60s so the queue can never wedge
+    const body = await req.json().catch(() => ({}));
+    const token = typeof body?.token === "string" ? body.token.slice(0, 64) : "";
+    if (!token) throw new ApiError(400, "NO_CLAIM_TOKEN", "claim token required");
 
     const input = parseJson<BatchInput>(job.inputJson, { planId: "", indexes: [], language: "hy" });
     const total = input.indexes.length;
@@ -48,6 +56,21 @@ export async function POST(_req: NextRequest, { params }: Params) {
     if (TERMINAL.includes(job.status)) {
       return ok({ status: job.status, done: cpDone(job.checkpointJson), total });
     }
+
+    // claim guard: only ONE driver may step the job at a time — the same token renews
+    // its own claim; a different token inside the 60s freshness window gets BUSY
+    const cur = await db.generationJob.findUnique({
+      where: { id },
+      select: { claimToken: true, claimAt: true },
+    });
+    const claimFresh = !!cur?.claimAt && cur.claimAt.getTime() > Date.now() - 60_000;
+    if (claimFresh && cur?.claimToken && cur.claimToken !== token) {
+      return ok({ status: "BUSY", done: cpDone(job.checkpointJson), total });
+    }
+    await db.generationJob.update({
+      where: { id },
+      data: { claimToken: token, claimAt: new Date() },
+    });
 
     if (job.status === "QUEUED") await jobs.markProcessing(id);
 

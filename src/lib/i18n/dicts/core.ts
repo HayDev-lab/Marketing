@@ -149,6 +149,9 @@ export const core: Record<Locale, Dict> = {
     "tour.s8.text": "Այստեղ են հավաքվում արտաքին աղբյուրները, որոնց հիման վրա հայտնաբերված են թրենդները՝ վավերացված ապացույցներով և չափանիշներով։",
     "tour.s9.title": "Ինչով է հարուստ համակարգը",
     "tour.s9.text": "Content-ում՝ A/B տարբերակներ և ZIP արտահանում, Planner-ում՝ ֆոնային զանգվածային գեներացիա, Analytics-ում՝ CSV արտահանում։ Փորձեք ամեն ինչ։",
+    "worker.label": "Ֆոնային գեներացիա",
+    "worker.title": "{n} խմբային աշխատանք ընթացքում — բացել Պլանավորումը",
+    "worker.pause": "Դադարեցնել ֆոնային վարումը (աշխատանքը մնում է հերթում)",
   },
   ru: {
     "app.name": "ՀայDev Marketing",
@@ -296,6 +299,9 @@ export const core: Record<Locale, Dict> = {
     "tour.s8.text": "Здесь собраны внешние источники, стоящие за обнаруженными трендами, — с проверенными цитатами и наблюдаемыми метриками.",
     "tour.s9.title": "Что внутри",
     "tour.s9.text": "В Content — A/B-варианты и ZIP-экспорт, в Planner — фоновая массовая генерация, в Analytics — экспорт CSV. Попробуйте всё.",
+    "worker.label": "Фоновая генерация",
+    "worker.title": "{n} фоновых задач в работе — открыть Планирование",
+    "worker.pause": "Остановить фоновое выполнение (задача остаётся в очереди)",
   },
   en: {
     "app.name": "ՀայDev Marketing",
@@ -443,5 +449,8 @@ export const core: Record<Locale, Dict> = {
     "tour.s8.text": "External sources behind your discovered trends live here — with verified quotes and observed metrics.",
     "tour.s9.title": "What's inside",
     "tour.s9.text": "A/B variants and ZIP export in Content, background batch generation in Planner, CSV export in Analytics. Try everything.",
+    "worker.label": "Background drafting",
+    "worker.title": "{n} batch job(s) in progress — open Planner",
+    "worker.pause": "Stop background driving (job stays in the queue)",
   },
 };

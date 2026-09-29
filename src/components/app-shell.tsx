@@ -28,6 +28,7 @@ import {
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
 import { CommandPalette, openCommandPalette } from "@/components/command-palette";
 import { OnboardingTour, openOnboardingTour } from "@/components/onboarding-tour";
+import { BatchWorkerChip } from "@/components/batch-worker-chip";
 import { LifeBuoy } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -241,6 +242,9 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
 
       {/* Global command palette (⌘K / Ctrl+K, G-to-jump) */}
       <CommandPalette />
+
+      {/* Background batch worker: polls the job feed, auto-resumes CONTENT_BATCH jobs on any view */}
+      <BatchWorkerChip />
 
       {/* First-visit onboarding tour (replayable from footer) */}
       <OnboardingTour />
