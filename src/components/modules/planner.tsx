@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useApp, pulseCore } from "@/lib/store";
@@ -21,7 +21,7 @@ import {
 import {
   CalendarRange, Lock, LockOpen, Pencil, Loader2, CheckCircle2, Sparkles,
   Target, Radio, Filter, CalendarDays, Crosshair, FlaskConical, Megaphone,
-  FileStack, Wand2, Repeat,
+  FileStack, Wand2, Repeat, Square,
 } from "lucide-react";
 
 // ---------- types (server API shapes) ----------
@@ -51,7 +51,7 @@ interface ContentPlanDto {
   itemsJson: string | null;
   status: string;
   createdAt: string;
-  contentItems: { id: string; title: string; approvalState: string; platform: string }[];
+  contentItems: { id: string; title: string; approvalState: string; platform: string; metaJson: string | null }[];
 }
 interface PlanItem {
   title?: string;
@@ -213,6 +213,9 @@ export function PlannerModule() {
   const [approving, setApproving] = useState(false);
   const [creatingItem, setCreatingItem] = useState<string | null>(null);
   const [createdItems, setCreatedItems] = useState<Record<string, boolean>>({});
+  // batch AI drafting: one plan card at a time, sequential per-item calls with progress + cancel
+  const [batch, setBatch] = useState<{ planId: string; done: number; total: number } | null>(null);
+  const batchStopRef = useRef(false);
 
   useEffect(() => {
     api<BrandLite[]>("/api/brands")
@@ -270,7 +273,8 @@ export function PlannerModule() {
         method: "POST",
         body: JSON.stringify({ brandId: activeBrandId, language: locale }),
       });
-      setContentPlans((prev) => [created, ...prev]);
+      // POST response has no contentItems relation — normalize before unshifting
+      setContentPlans((prev) => [{ ...created, contentItems: created.contentItems ?? [] }, ...prev]);
       pulseCore("SUCCESS");
       toast.success(t("planner.contentGenerated"));
     } catch (e) {
@@ -353,6 +357,64 @@ export function PlannerModule() {
       toast.error(errMessage(e));
     } finally {
       setCreatingItem(null);
+    }
+  };
+
+  // plan items that already have a draft (persisted via meta.itemIndex, falls back to session marks)
+  const coveredIndexes = useCallback((cp: ContentPlanDto): Set<number> => {
+    const covered = new Set<number>();
+    for (const ci of cp.contentItems ?? []) {
+      const meta = parseJson<{ itemIndex?: unknown }>(ci.metaJson, {});
+      if (typeof meta.itemIndex === "number") covered.add(meta.itemIndex);
+    }
+    for (const key of Object.keys(createdItems)) {
+      if (key.startsWith(`${cp.id}:`) && createdItems[key]) {
+        const idx = Number(key.split(":")[1]);
+        if (Number.isInteger(idx)) covered.add(idx);
+      }
+    }
+    return covered;
+  }, [createdItems]);
+
+  // batch generate: AI drafts for every plan item that does not have one yet
+  const generateAllFromPlan = async (cp: ContentPlanDto) => {
+    if (batch) return;
+    const covered = coveredIndexes(cp);
+    const remaining = cp.itemsJson ? parseJson<PlanItem[]>(cp.itemsJson, []).map((_, i) => i).filter((i) => !covered.has(i)) : [];
+    if (remaining.length === 0) {
+      toast.info(t("planner.batchNone"));
+      return;
+    }
+    batchStopRef.current = false;
+    setBatch({ planId: cp.id, done: 0, total: remaining.length });
+    let okCount = 0;
+    try {
+      for (const idx of remaining) {
+        if (batchStopRef.current) break;
+        try {
+          const res = await api<{ created: unknown[] }>("/api/plans/content/batch", {
+            method: "POST",
+            body: JSON.stringify({ id: cp.id, indexes: [idx], aiWrite: true }),
+          });
+          okCount += res.created.length;
+        } catch (e) {
+          toast.error(errMessage(e), { description: `#${idx + 1}` });
+        }
+        setBatch((prev) => (prev && prev.planId === cp.id ? { ...prev, done: prev.done + 1 } : prev));
+      }
+    } finally {
+      const stopped = batchStopRef.current;
+      setBatch(null);
+      batchStopRef.current = false;
+      if (okCount > 0) {
+        toast.success(stopped ? t("planner.batchPartial", { n: okCount }) : t("planner.batchDone", { n: okCount }));
+      } else if (stopped) {
+        toast.info(t("planner.batchStopped"));
+      }
+      if (activeBrandId) {
+        const content = await api<ContentPlanDto[]>(`/api/plans/content?brandId=${activeBrandId}`);
+        setContentPlans(content);
+      }
     }
   };
 
@@ -503,30 +565,68 @@ export function PlannerModule() {
   // ---------- content plan item ----------
   const renderContentPlan = (cp: ContentPlanDto, idx: number) => {
     const items = parseJson<PlanItem[]>(cp.itemsJson, []);
+    const covered = coveredIndexes(cp);
+    const remaining = items.map((_, i) => i).filter((i) => !covered.has(i));
+    const batchActive = batch?.planId === cp.id;
+    const batchBusy = Boolean(batch);
+    const coverage = items.length > 0 ? Math.round(((items.length - remaining.length) / items.length) * 100) : 100;
     return (
       <motion.div key={cp.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.04 }}>
-        <Card className="glass rounded-2xl">
+        <Card className={`glass rounded-2xl ${batchActive ? "border-[var(--neon)]/50" : ""}`}>
           <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
             <CardTitle className="flex min-w-0 items-center gap-2 text-sm sm:text-base">
               <FileStack className="h-4 w-4 shrink-0 text-[var(--neon-2)]" />
               <span className="truncate">{cp.title}</span>
             </CardTitle>
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
               <span>{items.length} {t("planner.items")}</span>
               <span>·</span>
-              <span>{cp.contentItems.length} {t("planner.drafts")}</span>
+              <span className={coverage === 100 && items.length > 0 ? "font-medium text-[var(--neon-2)]" : ""}>{cp.contentItems?.length ?? 0} {t("planner.drafts")}</span>
+              {items.length > 0 && (
+                <Button
+                  size="sm"
+                  variant={remaining.length === 0 ? "ghost" : "outline"}
+                  className="h-9 gap-1.5"
+                  disabled={batchBusy || remaining.length === 0}
+                  onClick={() => generateAllFromPlan(cp)}
+                  aria-label={t("planner.batchAll", { n: remaining.length })}
+                >
+                  {batchActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Sparkles className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />}
+                  {remaining.length === 0 ? t("planner.batchComplete") : t("planner.batchAll", { n: remaining.length })}
+                </Button>
+              )}
+              {batchActive && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10"
+                  onClick={() => { batchStopRef.current = true; }}
+                  aria-label={t("planner.batchStop")}
+                >
+                  <Square className="h-3 w-3" aria-hidden /> {t("planner.batchStop")}
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent className="grid gap-3">
+            {items.length > 0 && (
+              <div className="grid gap-1.5" aria-label={`${t("planner.drafts")} ${coverage}%`}>
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <span>{t("planner.coverage")}</span>
+                  <span className="font-mono">{items.length - remaining.length}/{items.length}{batchActive ? ` · ${batch!.done}/${batch!.total}` : ""}</span>
+                </div>
+                <Progress value={batchActive ? (batch!.done / Math.max(1, batch!.total)) * 100 : coverage} className="h-1.5" />
+              </div>
+            )}
             {items.length === 0 ? (
               <p className="py-2 text-center text-xs text-muted-foreground">{t("common.empty")}</p>
             ) : (
               <div className="grid gap-3 max-h-96 overflow-y-auto scrollbar-thin pr-1 sm:grid-cols-2">
                 {items.map((item, i) => {
                   const key = `${cp.id}:${i}`;
-                  const done = Boolean(createdItems[key]);
+                  const done = covered.has(i);
                   return (
-                    <div key={key} className="flex flex-col gap-2 rounded-xl border border-border/60 bg-muted/20 p-3">
+                    <div key={key} className={`flex flex-col gap-2 rounded-xl border p-3 ${done ? "border-[var(--neon-2)]/35 bg-[var(--neon-2)]/5" : "border-border/60 bg-muted/20"}`}>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {item.day != null && (
                           <span className="rounded-md px-2 py-0.5 text-[10px] font-bold text-[var(--neon)]" style={{ background: "color-mix(in oklab, var(--neon) 12%, transparent)" }}>
@@ -549,7 +649,7 @@ export function PlannerModule() {
                         size="sm"
                         className="mt-auto h-10 gap-1.5"
                         onClick={() => createItemFromPlan(cp.id, i)}
-                        disabled={creatingItem === key || done}
+                        disabled={creatingItem === key || done || batchBusy}
                         aria-label={t("planner.createItem")}
                       >
                         {creatingItem === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : done ? <CheckCircle2 className="h-3.5 w-3.5 text-[var(--neon-2)]" /> : <Wand2 className="h-3.5 w-3.5" />}

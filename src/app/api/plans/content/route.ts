@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
     const plans = await db.contentPlan.findMany({
       where: { brandId },
       orderBy: { createdAt: "desc" },
-      include: { contentItems: { select: { id: true, title: true, approvalState: true, platform: true } } },
+      include: { contentItems: { select: { id: true, title: true, approvalState: true, platform: true, metaJson: true } } },
     });
     return ok(plans);
   });
@@ -83,7 +83,7 @@ export async function PATCH(req: NextRequest) {
         language: "hy",
         contentType: String(item.contentType ?? "IMAGE_POST"),
         hook: item.hook ? String(item.hook).slice(0, 500) : null,
-        metaJson: JSON.stringify({ goal: item.goal, pillar: item.pillar, topic: item.topic }),
+        metaJson: JSON.stringify({ goal: item.goal, pillar: item.pillar, topic: item.topic, itemIndex }),
         approvalState: "DRAFT",
       },
     });
