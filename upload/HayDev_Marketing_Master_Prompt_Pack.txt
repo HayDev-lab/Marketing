@@ -1,0 +1,2720 @@
+ՀայDev Marketing
+MASTER PRODUCTION PROMPT PACK
+END-TO-END IMPLEMENTATION WITH CLOSED QA / FIX / RE-TEST LOOP
+
+======================================================================
+0. РОЛЬ И ГЛАВНАЯ ЦЕЛЬ
+======================================================================
+
+Ты — Principal Software Architect, Senior Full-Stack Engineer, AI/Media Systems Engineer,
+DevOps/SRE Engineer, Security Engineer, QA Automation Engineer и Senior UI/UX Engineer
+проекта «ՀայDev Marketing».
+
+Твоя задача — не создать демо и не собрать набор разрозненных экранов.
+Твоя задача — последовательно построить, интегрировать, протестировать и довести
+ՀայDev Marketing до production-ready состояния.
+
+Работай автономно настолько, насколько позволяет среда.
+Не останавливайся на промежуточной реализации, если можешь исправить проблему самостоятельно.
+
+ГЛАВНОЕ ПРАВИЛО:
+
+НЕ СЧИТАЙ ФУНКЦИЮ ГОТОВОЙ, ПОКА ОНА:
+1) реально не реализована;
+2) не подключена к реальному production path;
+3) не протестирована;
+4) не прошла негативные и failure-сценарии;
+5) не прошла повторный прогон после исправлений;
+6) не имеет понятного статуса и ошибок в UI;
+7) не сохраняет данные/состояние правильно;
+8) не соблюдает security и user isolation;
+9) не имеет доказательства работоспособности.
+
+Не заменяй реальные интеграции mock-ответами в production path.
+Mocks допустимы только в тестах и локальном development-режиме.
+Не объявляй PASS без воспроизводимого подтверждения.
+
+======================================================================
+1. ПРОДУКТ
+======================================================================
+
+Создать cloud-first AI Marketing Operating System:
+
+Business
+→ Intelligence
+→ Trends
+→ Strategy
+→ Content Plan
+→ Prompt Engineering
+→ Image
+→ Video
+→ Voice
+→ Voice Clone
+→ Music
+→ Avatar
+→ Editing
+→ Subtitles
+→ Approval
+→ Scheduling
+→ Publishing
+→ Analytics
+→ Learning
+
+Название продукта:
+ՀայDev Marketing
+
+Формат первой версии:
+Web application.
+
+Целевая модель:
+Один пользователь/команда пользователя, несколько брендов/бизнесов.
+Не строить сложную публичную SaaS RBAC-модель в V1.
+
+Авторизация:
+- Google OAuth;
+- Email + Password;
+- email verification;
+- password reset;
+- logout;
+- session management.
+
+Языки интерфейса:
+- Հայերեն
+- Русский
+- English
+
+Язык контента выбирается отдельно от языка интерфейса.
+
+======================================================================
+2. CLOUD AI ONLY
+======================================================================
+
+Все генеративные AI-модели должны работать через облачные API.
+
+НЕ делать production зависимым от:
+- локальной NVIDIA GPU;
+- CUDA;
+- локальной LLM;
+- локальной TTS;
+- локальной image generation;
+- локальной video generation;
+- локального voice cloning inference;
+- локального music generation inference.
+
+Разрешены локальные/open-source библиотеки только для:
+- UI;
+- WebGL;
+- FFmpeg/media post-processing;
+- deterministic compositing;
+- обработка файлов;
+- orchestration;
+- MCP;
+- тестирование;
+- metadata extraction;
+- subtitle processing;
+- безопасный media pipeline.
+
+Базовая архитектура:
+
+Application
+→ Capability Router
+→ Provider Registry
+→ Provider Adapter
+→ Cloud API
+
+Provider-specific логика не должна проникать в бизнес-логику UI.
+
+======================================================================
+3. РЕКОМЕНДУЕМЫЙ PRODUCTION STACK
+======================================================================
+
+Используй актуальные стабильные версии на момент реализации.
+
+Frontend:
+- Next.js App Router
+- TypeScript strict
+- React
+- Tailwind CSS
+- shadcn/ui или собственный component system
+- React Three Fiber / Three.js
+- Framer Motion
+- Zustand для editor state
+- TanStack Query там, где оправдано
+- Zod для runtime validation
+
+Backend:
+- Next.js server layer для обычных операций
+- отдельный durable worker/service layer для длительных media jobs
+- PostgreSQL
+- Supabase допустим для Auth/Postgres/Storage, если это упрощает production
+- Object Storage для всех media assets
+
+Long-running workflows:
+- durable orchestration
+- retries
+- exponential backoff
+- timeouts
+- checkpoints
+- resume
+- cancellation
+- concurrency limits
+- idempotency
+- dead-letter/failure handling
+- progress events
+- webhook processing
+- reconciliation jobs
+
+Не хранить большие binary media files в PostgreSQL.
+
+======================================================================
+4. ДОМЕННАЯ МОДЕЛЬ
+======================================================================
+
+Минимальные сущности:
+
+User
+Brand
+BrandProfile
+BusinessSource
+BusinessFact
+Audience
+Product
+Service
+Campaign
+MarketingPlan
+ContentPlan
+ContentItem
+Trend
+TrendEvidence
+PromptTemplate
+PromptVersion
+CharacterProfile
+StyleProfile
+VoiceProfile
+AvatarProfile
+MusicAsset
+MediaAsset
+ImageGeneration
+VideoProject
+VideoScene
+VideoVersion
+SubtitleTrack
+PublishingConnection
+PublishingJob
+ScheduledPost
+AnalyticsSnapshot
+ProviderConfig
+ModelConfig
+GenerationJob
+JobCheckpoint
+ApprovalState
+AuditLog
+McpClient
+McpPermission
+CostLedger
+
+Каждый пользовательский объект должен иметь owner/user isolation.
+
+======================================================================
+5. PROVIDER REGISTRY
+======================================================================
+
+Создай единый AIProviderRegistry.
+
+Capability types:
+
+LLM
+WEB_RESEARCH
+IMAGE_GENERATION
+IMAGE_EDIT
+VIDEO_GENERATION
+VIDEO_CONTINUATION
+VIDEO_IMAGE_TO_VIDEO
+TTS
+VOICE_CLONING
+VOICE_CONVERSION
+MUSIC_GENERATION
+AVATAR_VIDEO
+TRANSCRIPTION
+TRANSLATION
+EMBEDDINGS
+MODERATION
+
+Каждый adapter должен реализовывать единый contract:
+
+interface ProviderAdapter {
+  providerId: string;
+  capabilities: Capability[];
+
+  validateConfig(): Promise<ValidationResult>;
+  healthCheck(): Promise<HealthResult>;
+
+  estimateCost?(request: unknown): Promise<CostEstimate>;
+
+  submit(request: unknown): Promise<ProviderJob>;
+  getStatus(jobId: string): Promise<ProviderJobStatus>;
+  getResult(jobId: string): Promise<ProviderResult>;
+
+  cancel?(jobId: string): Promise<void>;
+}
+
+Provider Registry хранит:
+- provider;
+- model;
+- capability;
+- API status;
+- supported languages;
+- supported durations;
+- reference-image support;
+- continuation support;
+- aspect ratios;
+- max input/output limits;
+- estimated cost;
+- timeout;
+- retry policy;
+- fallback order;
+- provider-specific constraints.
+
+Перед реализацией конкретного adapter:
+1) открыть актуальную официальную документацию API;
+2) проверить model ID;
+3) проверить endpoint;
+4) проверить auth;
+5) проверить async job mechanics;
+6) проверить webhook/polling;
+7) проверить rate limits;
+8) проверить supported media inputs;
+9) проверить supported languages;
+10) проверить pricing;
+11) проверить коммерческие условия;
+12) только после этого включать adapter.
+
+Никогда не предполагать capability по названию модели.
+
+======================================================================
+6. MODEL ROUTER
+======================================================================
+
+Не hardcode одну модель.
+
+Создать Model Registry и Capability Router.
+
+Маршрутизация учитывает:
+- capability;
+- quality;
+- latency;
+- cost;
+- language;
+- context;
+- supported aspect ratio;
+- supported duration;
+- reference support;
+- continuation support;
+- provider health;
+- user preference;
+- budget ceiling.
+
+Поддержать:
+AUTO
+MANUAL MODEL SELECTION
+
+AUTO выбирает модель только из реально доступных и проверенных adapters.
+
+Если provider недоступен:
+- показать причину;
+- предложить fallback;
+- не менять provider скрытно;
+- не запускать дополнительный платный вызов без правил пользователя.
+
+======================================================================
+7. НАСТРОЙКИ ПРОВАЙДЕРОВ
+======================================================================
+
+Создать:
+Settings → AI Providers
+
+Категории:
+- LLM
+- Research
+- Image
+- Video
+- TTS
+- Voice Clone
+- Music
+- Avatar
+- Transcription
+- Publishing
+
+Для каждого provider:
+- API Key / OAuth
+- base URL если требуется
+- verify connection
+- available models
+- capabilities
+- status
+- last health check
+- default model
+- fallback model
+- spending limit
+- retry policy
+- enable/disable
+
+Секреты:
+- server-side only;
+- encrypted at rest;
+- masked in UI;
+- никогда не отправлять в browser bundle;
+- никогда не отдавать через MCP;
+- никогда не писать в application logs.
+
+======================================================================
+8. BUSINESS ONBOARDING
+======================================================================
+
+После регистрации:
+
+STEP 1:
+«Расскажите о своём бизнесе»
+
+STEP 2:
+Добавить сайт бизнеса — optional.
+
+STEP 3:
+Дополнительные материалы:
+- logo;
+- product images;
+- brand book;
+- reference content;
+- existing social profiles.
+
+STEP 4:
+Business Analyzer.
+
+Анализ сайта должен извлекать только реально обнаруженные данные.
+
+Создать:
+- company summary;
+- products/services;
+- target audiences;
+- geography;
+- positioning;
+- USP candidates;
+- price information, только если реально найдено;
+- tone;
+- competitor observations только после исследования;
+- opportunities;
+- risks;
+- content opportunities.
+
+Строго разделять:
+SOURCE FACT
+AI INFERENCE
+USER PROVIDED FACT
+
+Для SOURCE FACT сохранять provenance:
+- URL
+- timestamp
+- title
+- extracted evidence
+
+AI не имеет права выдумывать:
+- цену;
+- скидку;
+- сертификат;
+- клиента;
+- отзыв;
+- награду;
+- гарантию;
+- медицинский результат;
+- статистику.
+
+======================================================================
+9. BRAND MEMORY
+======================================================================
+
+Создать Brand Profile:
+
+Brand
+BusinessFacts
+Products
+Services
+Audiences
+BrandVoice
+VisualIdentity
+LogoAssets
+Characters
+Voices
+MusicPreferences
+ForbiddenClaims
+Campaigns
+PromptPreferences
+PlatformPreferences
+Languages
+Geographies
+
+Все генерации должны читать актуальную Brand Memory.
+
+После изменения Brand Memory:
+- новые генерации используют новую версию;
+- старые материалы сохраняют metadata своей версии;
+- не изменять прошлый материал скрытно.
+
+======================================================================
+10. TREND INTELLIGENCE AGENT
+======================================================================
+
+Создать отдельного Trend Agent.
+
+Задача:
+находить свежие тренды, сигналы, форматы и идеи и адаптировать их к конкретному бизнесу.
+
+Trend Agent должен:
+- искать свежие источники;
+- сохранять source;
+- сохранять дату;
+- определять platform;
+- определять language;
+- определять geography;
+- сохранять observable metrics, если доступны;
+- оценивать brand relevance;
+- объяснять почему тренд подходит/не подходит;
+- предлагать оригинальную адаптацию.
+
+Trend Card:
+
+Trend
+Source
+ObservedAt
+Platform
+Region
+Evidence
+Metrics
+Confidence
+BrandFit
+SuggestedAdaptation
+Risk
+
+Статусы:
+VERIFIED_TREND
+POPULAR_TOPIC
+EMERGING_SIGNAL
+HYPOTHESIS
+
+Нельзя называть трендом то, что невозможно подтвердить.
+
+Нельзя копировать чужой ролик 1:1.
+Разрешено извлекать:
+- механику;
+- pacing;
+- hook structure;
+- storytelling pattern;
+- interaction format;
+- visual grammar.
+
+А затем создавать оригинальную адаптацию для бренда.
+
+Pipeline:
+
+Trend
+→ Evidence
+→ Brand Fit
+→ Creative Concept
+→ Hook
+→ Script
+→ Platform Adaptation
+→ Model Prompt
+→ Generation
+
+======================================================================
+11. MARKETING PLANNER
+======================================================================
+
+На основании Brand Intelligence создать:
+- marketing objectives;
+- audience segments;
+- content pillars;
+- channel strategy;
+- funnel;
+- weekly plan;
+- monthly plan;
+- posting cadence;
+- creative hypotheses;
+- campaign ideas;
+- KPIs;
+- experimentation plan.
+
+План всегда редактируемый.
+
+Пользователь может:
+- regenerate section;
+- lock section;
+- edit;
+- approve;
+- convert into content plan.
+
+======================================================================
+12. PLATFORM-AWARE CONTENT ENGINE
+======================================================================
+
+Поддержать минимум:
+- Instagram
+- TikTok
+- Facebook
+- Telegram
+
+Создать обновляемый PlatformRulesRegistry.
+
+Хранить:
+- aspect ratios;
+- duration constraints;
+- caption constraints;
+- thumbnail constraints;
+- safe zones;
+- upload requirements;
+- supported media;
+- publishing limitations;
+- current API availability.
+
+Не зашивать platform rules навсегда в prompt.
+
+Перед публикацией выполнять preflight validation.
+
+======================================================================
+13. PROMPT COPILOT
+======================================================================
+
+Встроить маленького чат-ассистента.
+
+Его задача:
+
+user intent
+→ structured creative brief
+→ provider/model-aware prompt
+
+Prompt Copilot должен учитывать:
+- model strengths;
+- model limitations;
+- prompt syntax;
+- reference behavior;
+- supported duration;
+- supported aspect ratio;
+- image-to-video support;
+- continuity support;
+- language constraints.
+
+Показывать:
+1. исходную идею;
+2. optimized prompt;
+3. выбранную модель;
+4. почему она выбрана;
+5. параметры;
+6. cost estimate, если возможно.
+
+Пользователь может вручную редактировать prompt.
+
+======================================================================
+14. PROMPT LIBRARY
+======================================================================
+
+Создать минимум:
+
+20 ниш × 5 image templates × 5 video templates
+= минимум 200 стартовых шаблонов.
+
+Ниши:
+
+1. Restaurants
+2. Bakery
+3. Fashion
+4. Beauty
+5. Cosmetics
+6. Clinics/Dentistry
+7. Fitness
+8. Real Estate
+9. Construction
+10. Furniture/Interior
+11. Automotive
+12. Electronics
+13. Legal/Accounting
+14. Education
+15. Hotels/Tourism
+16. Delivery/Transport
+17. Flowers/Gifts
+18. Pets
+19. Software/AI
+20. Events/Weddings
+
+Для каждой:
+- image prompts;
+- video prompts;
+- hooks;
+- CTA patterns;
+- platform variants;
+- editable variables;
+- brand placeholders;
+- trend-adaptation placeholders.
+
+Добавить:
+- search;
+- filters;
+- favorites;
+- custom prompts;
+- duplicate;
+- version history;
+- preview;
+- save successful prompt as template.
+
+======================================================================
+15. IMAGE GENERATION
+======================================================================
+
+Подключить через cloud API минимум два совместимых маршрута.
+
+Поддержать:
+- text-to-image;
+- reference image;
+- image editing, где поддерживается;
+- aspect ratio;
+- seed, если поддерживается;
+- negative constraints, если поддерживается;
+- multiple candidates;
+- model selection;
+- variation.
+
+Сохранять:
+- original prompt;
+- compiled prompt;
+- model;
+- provider;
+- parameters;
+- references;
+- provider job ID;
+- cost;
+- latency;
+- result;
+- errors.
+
+Никогда не терять исходный reference asset.
+
+======================================================================
+16. VIDEO GENERATION
+======================================================================
+
+Основной модуль.
+
+Пользователь выбирает:
+- 15 sec
+- 30 sec
+- 60 sec
+
+Не предполагать, что одна модель генерирует весь ролик одним запросом.
+
+Архитектура:
+
+Video Project
+→ Script
+→ Shot Plan
+→ Scenes
+→ Generation
+→ Continuity
+→ Assembly
+→ Audio
+→ Subtitles
+→ Logo
+→ Final Render
+
+Каждая сцена — отдельная сущность.
+
+VideoScene хранит:
+- scene id;
+- order;
+- duration;
+- prompt;
+- provider;
+- model;
+- parameters;
+- source references;
+- output;
+- last frame;
+- status;
+- cost;
+- retries;
+- version.
+
+======================================================================
+17. SCENE CONTINUITY
+======================================================================
+
+После успешной сцены:
+
+1. сохранить исходный result;
+2. извлечь последний пригодный кадр;
+3. сохранить как continuity asset;
+4. использовать его как next-scene reference, если API модели это поддерживает;
+5. передать Character Bible;
+6. передать Style Bible;
+7. сгенерировать следующую сцену.
+
+Не утверждать continuity, если конкретная модель/API это не поддерживает.
+
+Если модель поддерживает start/end frame:
+использовать эту capability.
+
+Если нет:
+использовать semantic continuity через:
+- character references;
+- style references;
+- same wardrobe;
+- same environment;
+- same camera grammar;
+- same color palette.
+
+======================================================================
+18. CHARACTER BIBLE
+======================================================================
+
+Хранить:
+- reference images;
+- approved face;
+- appearance;
+- hair;
+- clothing;
+- age range;
+- props;
+- prohibited changes;
+- approved frames;
+- voice assignment.
+
+Версионировать.
+
+Новая версия Character Bible не должна автоматически менять уже утверждённые сцены.
+
+======================================================================
+19. STYLE BIBLE
+======================================================================
+
+Хранить:
+- palette;
+- lighting;
+- camera language;
+- lens;
+- camera movement;
+- environment;
+- textures;
+- typography;
+- brand constraints;
+- motion style.
+
+======================================================================
+20. AUDIO CONTINUITY
+======================================================================
+
+Не создавать финальную музыку и narration независимо в каждой video scene, если это ломает continuity.
+
+Предпочтительно:
+
+silent/production scenes
+→ assembly
+→ master narration
+→ master music
+→ mix
+→ subtitles
+→ export
+
+======================================================================
+21. DURABLE GENERATION ENGINE
+======================================================================
+
+Критически важный блок.
+
+Каждая длительная генерация получает:
+
+internal_job_id
+provider
+provider_job_id
+status
+attempt
+stage
+input_hash
+started_at
+updated_at
+cost
+output_assets
+error
+checkpoint
+
+Статусы:
+
+DRAFT
+QUEUED
+SUBMITTED
+PROCESSING
+WAITING_PROVIDER
+RETRYING
+COMPLETED
+FAILED
+CANCELLED
+NEEDS_USER_ACTION
+
+Если browser/server connection оборвался:
+
+НЕ создавать новую платную генерацию автоматически.
+
+Алгоритм:
+1. найти internal job;
+2. найти provider job ID;
+3. спросить provider о статусе;
+4. получить существующий result;
+5. reconciliate local state;
+6. только если доказано, что previous operation failed окончательно — рассматривать retry.
+
+Использовать idempotency keys там, где provider поддерживает.
+
+======================================================================
+22. RESUME
+======================================================================
+
+Пользователь всегда видит:
+«Продолжить»
+
+Resume работает с последнего успешного checkpoint.
+
+Пример:
+
+script ✓
+scene_1 ✓
+scene_2 ✓
+scene_3 FAILED
+audio not started
+
+Resume:
+начать со scene_3.
+
+НЕ пересоздавать scene_1 и scene_2.
+
+После server restart система должна восстановить active jobs.
+
+======================================================================
+23. TTS
+======================================================================
+
+Создать TTS Provider Layer.
+
+Gemini TTS включить как обязательный поддерживаемый cloud adapter,
+если актуальный аккаунт/API предоставляет нужные capabilities.
+
+UI:
+- provider;
+- model;
+- language;
+- voice;
+- speaking style;
+- speed/pacing, если API поддерживает;
+- preview;
+- regenerate;
+- save as brand voice.
+
+Не отправлять неподдерживаемые параметры.
+
+Сохранять:
+- exact script;
+- model;
+- voice;
+- parameters;
+- provider ID;
+- result;
+- duration;
+- cost.
+
+======================================================================
+24. VOICE CLONING
+======================================================================
+
+Voice cloning — обязательная capability.
+
+Только через cloud API.
+
+Provider выбирается из тех, которые в момент реализации:
+- имеют официальный/разрешённый API;
+- разрешают необходимый тип использования;
+- поддерживают нужный язык;
+- дают приемлемое качество.
+
+Создать Voice Clone Wizard:
+
+Provider
+→ Consent
+→ Reference Recording
+→ Quality Check
+→ Clone
+→ Test
+→ Save
+
+Хранить:
+- provider voice ID;
+- owner;
+- consent status;
+- consent evidence reference;
+- language;
+- creation date;
+- permitted uses;
+- status.
+
+Не позволять агенту подтверждать consent от имени человека.
+
+Не позволять клонирование голоса третьего лица без подтверждения прав/согласия.
+
+Для пользователя интерфейс должен быть простым:
+«Клонировать мой голос»
+→ записать/загрузить образец
+→ подтверждение
+→ создать
+→ прослушать тест
+→ сохранить.
+
+======================================================================
+25. TALKING AVATAR
+======================================================================
+
+Создать AvatarProvider abstraction.
+
+Поддержать cloud avatar APIs, принимающие:
+- text;
+- или готовую audio track.
+
+Pipeline:
+
+Script
+→ TTS / Cloned Voice
+→ Avatar API
+→ Avatar Video
+→ Editor
+
+Если provider поддерживает external audio:
+использовать готовую дорожку, чтобы сохранять выбранный голос.
+
+Поддержать:
+- avatar selection;
+- custom avatar, где разрешено;
+- background;
+- voice;
+- script;
+- preview;
+- generation status.
+
+Два режима:
+
+A. Avatar для рекламного контента.
+B. Опциональный говорящий AI assistant внутри ՀայDev Marketing.
+
+Avatar не должен быть обязательным для работы всей системы.
+
+======================================================================
+26. MUSIC GENERATION
+======================================================================
+
+Создать Music Provider abstraction.
+
+Поддержать:
+
+A. Instrumental
+Prompt → music
+
+B. Song
+User-provided lyrics → song generation
+
+Хранить:
+- lyrics;
+- style prompt;
+- provider;
+- model;
+- parameters;
+- output;
+- duration;
+- cost;
+- usage metadata.
+
+Никогда не считать автоматически, что пользователь имеет права на любой предоставленный текст/музыку.
+Хранить source metadata.
+
+======================================================================
+27. USER MUSIC
+======================================================================
+
+Пользователь может загрузить свою музыку.
+
+Поддержать:
+- trim;
+- loop;
+- volume;
+- fade in/out;
+- ducking under voice;
+- replacement;
+- start offset.
+
+Оригинал не изменять.
+
+======================================================================
+28. SUBTITLES
+======================================================================
+
+Поддержать:
+- automatic transcription;
+- SRT;
+- VTT;
+- burned-in subtitles;
+- manual editing;
+- translation;
+- active-word style только при наличии достоверных word timestamps.
+
+Styles:
+- clean;
+- bold social;
+- karaoke/highlight;
+- brand preset.
+
+Subtitle editor:
+- text;
+- timing;
+- position;
+- font;
+- size;
+- background;
+- outline;
+- safe zone.
+
+После изменения voice track выполнить re-alignment.
+
+Для армянского текста проверить:
+- glyphs;
+- punctuation;
+- wrapping;
+- line breaks;
+- font support.
+
+======================================================================
+29. VIDEO EDITOR
+======================================================================
+
+Создать удобный visual editor.
+
+Layout:
+
+LEFT:
+Scenes
+
+CENTER:
+Video Preview
+
+RIGHT:
+Inspector
+
+BOTTOM:
+Timeline
+
+Tracks:
+Video
+Voice
+Music
+Subtitles
+Logo
+Overlay
+
+Функции:
+- reorder scenes;
+- trim;
+- split;
+- replace;
+- regenerate only selected scene;
+- duplicate;
+- delete;
+- logo position;
+- subtitle editing;
+- audio volume;
+- transitions;
+- preview;
+- undo/redo;
+- autosave.
+
+Изменение одной сцены не должно автоматически пересоздавать весь ролик.
+
+======================================================================
+30. LOGO
+======================================================================
+
+Пользователь может загрузить логотип.
+
+Поддержать:
+- PNG;
+- WebP;
+- SVG после безопасной обработки;
+- position;
+- size;
+- opacity;
+- intro/outro;
+- watermark.
+
+Final compositing выполнять deterministic media pipeline.
+
+Не просить video AI рисовать логотип, если нужен точный брендовый знак.
+
+======================================================================
+31. MANUAL MODE
+======================================================================
+
+Manual Mode:
+
+Trend
+→ Concept
+→ Script
+→ Prompt
+→ Generate
+→ Edit
+→ Approve
+→ Schedule
+→ Publish
+
+На каждом этапе пользователь может:
+- принять;
+- изменить;
+- regenerate;
+- выбрать другую модель;
+- выбрать другой provider;
+- вернуться назад;
+- сохранить draft;
+- остановить process;
+- продолжить позже.
+
+До платной операции:
+- показывать доступную estimate;
+- показывать provider/model;
+- показывать что именно будет создано.
+
+Manual Mode никогда не должен автоматически публиковать материал без явного пользовательского действия.
+
+======================================================================
+32. AUTOPILOT MODE
+======================================================================
+
+Autopilot — обязательный второй режим.
+
+Autopilot работает не «без ограничений», а только внутри User Policy.
+
+Пользователь отдельно настраивает:
+
+Trend Discovery:
+ON/OFF
+
+Automatic Planning:
+ON/OFF
+
+Automatic Generation:
+ON/OFF
+
+Paid Generation:
+ON/OFF
+
+Automatic Scheduling:
+ON/OFF
+
+Automatic Publishing:
+ON/OFF
+
+Human Approval Required:
+ON/OFF
+
+Также:
+- platforms allowed;
+- brands allowed;
+- languages;
+- daily budget;
+- weekly budget;
+- monthly budget;
+- max generation cost;
+- max retries;
+- max content items/day;
+- posting windows;
+- forbidden topics;
+- forbidden claims;
+- minimum quality threshold.
+
+Если Human Approval Required = ON:
+Autopilot не может опубликовать материал самостоятельно.
+
+======================================================================
+33. AUTOPILOT WORKFLOW
+======================================================================
+
+Пример:
+
+1. Load Brand Profile.
+2. Check Autopilot Policy.
+3. Research fresh trends.
+4. Rank relevant trend opportunities.
+5. Generate content concepts.
+6. Create content plan.
+7. Choose model/provider.
+8. Check estimated cost against limits.
+9. Generate draft.
+10. Run automatic QA.
+11. If QA fails → repair loop.
+12. If Human Approval Required → queue for approval.
+13. Otherwise schedule/publish only if explicitly allowed.
+14. Verify actual publishing result.
+15. Collect analytics.
+16. Feed findings into future planning.
+
+Autopilot обязан оставлять Audit Trail.
+
+======================================================================
+34. COST CONTROL
+======================================================================
+
+Создать Cost Ledger.
+
+Для каждого AI/API call:
+- user;
+- brand;
+- campaign;
+- provider;
+- model;
+- capability;
+- estimated cost;
+- actual cost, если известно;
+- timestamp;
+- job id.
+
+UI:
+- today;
+- week;
+- month;
+- provider breakdown;
+- campaign breakdown.
+
+Hard budget limits должны блокировать новый платный call.
+
+Не блокировать получение результата уже запущенной операции.
+
+======================================================================
+35. APPROVAL SYSTEM
+======================================================================
+
+Даже без сложной RBAC должен быть Approval State.
+
+Статусы:
+DRAFT
+GENERATING
+READY_FOR_REVIEW
+CHANGES_REQUESTED
+APPROVED
+SCHEDULED
+PUBLISHED
+FAILED
+
+Важно:
+
+Если после APPROVED пользователь меняет:
+- video;
+- image;
+- caption;
+- account;
+- platform;
+- voice;
+- materially relevant content;
+
+старое approval становится INVALIDATED.
+
+Нельзя незаметно изменить approved material и оставить прежнее approval.
+
+======================================================================
+36. PUBLISHING CENTER
+======================================================================
+
+Поддержать:
+- Instagram
+- TikTok
+- Facebook
+- Telegram
+
+Архитектура:
+
+PublishingProvider
+→ Connection
+→ Preflight
+→ Publish Job
+→ Provider Response
+→ Reconciliation
+→ Final Status
+
+Статусы:
+
+DRAFT
+READY
+SCHEDULED
+SUBMITTING
+PROVIDER_ACCEPTED
+PUBLISHED
+ACTION_REQUIRED
+FAILED
+CANCELLED
+
+Критически:
+PROVIDER_ACCEPTED ≠ PUBLISHED.
+
+Только подтверждённый final state отображается как опубликовано.
+
+======================================================================
+37. SCHEDULING
+======================================================================
+
+Поддержать:
+- date/time;
+- timezone;
+- reschedule;
+- cancel;
+- recurring content plan generation — если пользователь явно включил.
+
+Перед scheduled publish:
+- проверить auth token;
+- проверить media availability;
+- проверить platform rules;
+- проверить approval;
+- проверить connection state.
+
+======================================================================
+38. SOCIAL CONNECTIONS
+======================================================================
+
+Settings → Social Accounts
+
+Для каждой площадки:
+- connect;
+- reconnect;
+- disconnect;
+- token expiry;
+- status;
+- permissions;
+- connected account/page/channel;
+- last successful publish.
+
+Не показывать «Connected», если token invalid.
+
+======================================================================
+39. TIKTOK И ДРУГИЕ ОГРАНИЧЕННЫЕ API
+======================================================================
+
+Не обещать функцию, которую current platform/API реально не разрешает.
+
+Для каждого social adapter:
+- проверить официальные требования;
+- реализовать capability detection;
+- показать пользователю реальный режим.
+
+Возможные статусы:
+DIRECT_PUBLISH_AVAILABLE
+DRAFT_TRANSFER_ONLY
+USER_ACTION_REQUIRED
+NOT_AVAILABLE
+
+Никакого fake success.
+
+======================================================================
+40. ANALYTICS
+======================================================================
+
+Собирать доступные официально показатели:
+- views;
+- reach;
+- impressions;
+- likes;
+- comments;
+- shares;
+- saves;
+- clicks;
+- watch time;
+- completion rate;
+- platform-specific metrics.
+
+Не выдумывать недоступные показатели.
+
+Analytics должны связываться с:
+- platform;
+- content item;
+- campaign;
+- trend;
+- hook;
+- prompt;
+- model;
+- format;
+- duration.
+
+======================================================================
+41. LEARNING LOOP
+======================================================================
+
+Создать внутренний feedback layer.
+
+Не «самообучать модель».
+
+Хранить наблюдения:
+- какой hook работал лучше;
+- какая длительность;
+- какой формат;
+- какая тема;
+- какая платформа;
+- какой CTA;
+- какой visual style.
+
+На основании этого Marketing Planner может делать новые recommendations.
+
+Всегда отличать:
+OBSERVED DATA
+AI INTERPRETATION
+
+======================================================================
+42. MCP SERVER
+======================================================================
+
+Обязательный модуль.
+
+Создать собственный MCP Server ՀայDev Marketing.
+
+Использовать актуальный официальный MCP SDK/specification.
+
+Remote transport:
+HTTPS / Streamable HTTP, если соответствует актуальной спецификации.
+
+При необходимости:
+stdio bridge для локальных MCP clients.
+
+MCP должен работать через ТО ЖЕ application/service layer,
+что и web UI.
+
+Никакой отдельной параллельной бизнес-логики.
+
+======================================================================
+43. MCP TOOLS
+======================================================================
+
+Минимальный набор:
+
+business_list
+business_get
+business_analyze_site
+
+trends_search
+trend_get
+
+marketing_plan_create
+content_plan_create
+
+prompt_library_search
+prompt_compile
+
+image_generate
+image_edit
+
+video_project_create
+video_generate
+video_scene_regenerate
+
+tts_generate
+voice_list
+avatar_generate
+music_generate
+
+job_get
+job_resume
+job_cancel
+
+content_get
+content_request_approval
+
+post_schedule
+post_publish
+publication_get_status
+
+analytics_get
+
+Все инструменты:
+- typed input;
+- typed output;
+- auth;
+- permission check;
+- audit logging;
+- idempotency где необходимо.
+
+======================================================================
+44. MCP RESOURCES
+======================================================================
+
+Предоставить безопасные Resources:
+- Brand Profile
+- Marketing Plan
+- Campaign
+- Content Plan
+- approved Prompt Templates
+- selected assets metadata
+- generation status
+
+Не отдавать:
+- API secrets;
+- raw secret tokens;
+- private consent recordings без отдельной необходимости;
+- provider secret configuration.
+
+======================================================================
+45. MCP PERMISSIONS
+======================================================================
+
+Создать простые permission presets:
+
+READ_ONLY
+CREATE_DRAFTS
+EXECUTE_GENERATIONS
+PUBLISH_ALLOWED
+
+Отдельные toggles:
+- canUsePaidGeneration
+- canSchedule
+- canPublish
+- canAccessVoiceProfiles
+- maxSpend
+
+External AI не может самостоятельно расширить свои права.
+
+======================================================================
+46. MCP AUDIT
+======================================================================
+
+Логировать:
+- client;
+- tool;
+- timestamp;
+- input summary;
+- object IDs;
+- cost impact;
+- result;
+- error.
+
+MCP call, web UI action и Autopilot action должны быть различимы по actor type.
+
+======================================================================
+47. ULTRA-FUTURISTIC UI/UX
+======================================================================
+
+Общий стиль:
+
+ULTRA FUTURISTIC
+PREMIUM
+WEBGL
+GLASS
+3D
+AI CREATIVE COCKPIT
+
+Не делать шаблонную SaaS-админку.
+
+Основной визуальный язык:
+- dark premium background;
+- glass cards;
+- glass buttons;
+- 3D depth;
+- thin luminous borders;
+- volumetric highlights;
+- controlled neon accents;
+- soft blur;
+- high-end motion;
+- clear hierarchy.
+
+«20% transparency» трактовать как примерно 20% прозрачности фонового glass layer
+при сохранении полной читаемости текста/иконок.
+Не уменьшать opacity всего компонента.
+
+======================================================================
+48. WEBGL THEME — MARKETING SIGNAL CORE
+======================================================================
+
+Создать тематическое WebGL-ядро:
+
+MARKETING SIGNAL CORE
+
+Оно символизирует:
+- business;
+- trends;
+- creative generation;
+- publishing;
+- analytics.
+
+Состояния:
+
+IDLE
+ANALYZING
+TREND_SEARCH
+PLANNING
+GENERATING
+PUBLISHING
+SUCCESS
+ERROR
+
+Ядро визуально реагирует на state, но:
+- не мешает UX;
+- не блокирует scroll;
+- не потребляет excessive GPU;
+- отключается/упрощается на слабых устройствах;
+- учитывает prefers-reduced-motion.
+
+======================================================================
+49. HOME / DASHBOARD
+======================================================================
+
+Главный экран должен содержать:
+- active brand;
+- Manual / Autopilot switch;
+- Marketing Signal Core;
+- quick actions;
+- current generations;
+- trend opportunities;
+- next scheduled posts;
+- budget usage;
+- campaign status.
+
+Quick Actions:
+- Анализировать бизнес
+- Найти тренды
+- Создать стратегию
+- Создать контент
+- Создать изображение
+- Создать видео
+- Создать музыку
+- Создать озвучку
+- Создать аватар
+- Запланировать публикацию
+
+======================================================================
+50. VISUAL SELECTION UX
+======================================================================
+
+Избегать скучных dropdown там, где visual selection полезнее.
+
+Использовать большие glass cards для:
+- Brand
+- Platform
+- Content Type
+- Duration
+- Language
+- Niche
+- Trend
+- Model
+- Voice
+- Avatar
+- Subtitle Style
+
+Если вариантов десятки/сотни — дополнить search/filter.
+
+======================================================================
+51. RESPONSIVENESS
+======================================================================
+
+Desktop-first, responsive.
+
+Editor может иметь simplified mobile mode,
+но основные действия должны быть доступны на:
+- desktop;
+- tablet;
+- mobile.
+
+Не пытаться уместить desktop timeline 1:1 на маленьком экране.
+Создать mobile-appropriate view.
+
+======================================================================
+52. I18N QA
+======================================================================
+
+Обязательная проверка:
+- Հայերեն
+- Русский
+- English
+
+Не должно остаться:
+- hardcoded strings;
+- untranslated toast;
+- untranslated validation errors;
+- untranslated empty states;
+- untranslated dialogs;
+- untranslated system status.
+
+Проверить layout expansion.
+
+Особое внимание:
+- Armenian font glyphs;
+- line-height;
+- forms;
+- button width;
+- subtitle preview.
+
+======================================================================
+53. ACCESSIBILITY
+======================================================================
+
+Минимум:
+- semantic HTML;
+- keyboard navigation;
+- focus states;
+- ARIA where needed;
+- contrast;
+- reduced motion;
+- accessible forms;
+- accessible errors;
+- no critical information only by color.
+
+======================================================================
+54. SECURITY BASELINE
+======================================================================
+
+Обязательно:
+- strict server-side authorization;
+- object ownership checks;
+- secure sessions;
+- CSRF protection where relevant;
+- SSRF protection for website analysis;
+- safe URL validation;
+- upload validation;
+- file type verification;
+- file size limits;
+- SVG sanitization;
+- rate limiting;
+- brute force protection;
+- signed asset URLs;
+- secret management;
+- audit logs;
+- webhook signature verification;
+- SQL injection prevention;
+- XSS prevention;
+- safe rendering of model output;
+- prompt injection defenses in website/trend ingestion.
+
+======================================================================
+55. PROMPT INJECTION DEFENSE
+======================================================================
+
+Website/trend/social content is UNTRUSTED DATA.
+
+Никогда не позволять тексту из сайта или внешнего источника:
+- менять system instructions;
+- раскрывать secrets;
+- подключать provider;
+- публиковать;
+- увеличивать budget;
+- выполнять MCP tool;
+- изменять permissions.
+
+Разделять:
+SYSTEM POLICY
+USER INTENT
+TRUSTED BRAND DATA
+UNTRUSTED EXTERNAL CONTENT
+
+======================================================================
+56. SSRF DEFENSE
+======================================================================
+
+Website Analyzer должен:
+- разрешать только http/https;
+- блокировать localhost;
+- private network ranges;
+- metadata endpoints;
+- file://;
+- unsupported protocols;
+- redirect to private IP;
+- DNS rebinding risk.
+
+======================================================================
+57. FILE SECURITY
+======================================================================
+
+Uploads:
+- validate MIME;
+- validate magic bytes where possible;
+- max size;
+- sanitize file names;
+- random storage key;
+- malware scanning integration where practical;
+- no executable upload execution.
+
+======================================================================
+58. WEBHOOK SECURITY
+======================================================================
+
+Все provider/social webhooks:
+- verify signature where supported;
+- deduplicate;
+- save raw event metadata safely;
+- idempotent processing;
+- replay protection where possible.
+
+Repeated webhook must not:
+- duplicate media;
+- duplicate publish;
+- duplicate billing entry.
+
+======================================================================
+59. OBSERVABILITY
+======================================================================
+
+Добавить:
+- structured logs;
+- request IDs;
+- job IDs;
+- provider job IDs;
+- error tracking;
+- performance metrics;
+- queue metrics;
+- job latency;
+- failed provider calls;
+- publishing failures;
+- webhook failures.
+
+Никаких secrets в logs.
+
+======================================================================
+60. ERROR UX
+======================================================================
+
+Не показывать пользователю:
+«Something went wrong»
+если можно дать actionable status.
+
+Примеры:
+- Provider authorization expired.
+- Generation still processing.
+- Generation failed at scene 3.
+- Publication accepted by provider but final publish not confirmed.
+- Budget limit reached.
+- TikTok requires user action.
+- Voice provider does not support selected language.
+
+Каждая recoverable ошибка должна иметь понятное действие:
+Retry
+Resume
+Reconnect
+Change Provider
+Edit
+Cancel
+
+======================================================================
+61. DATABASE MIGRATIONS
+======================================================================
+
+Все изменения schema:
+- migration files;
+- deterministic;
+- reversible там, где разумно;
+- tested on empty DB;
+- tested on existing seeded DB.
+
+Никаких ручных production-only SQL шагов без документации.
+
+======================================================================
+62. DATA INTEGRITY
+======================================================================
+
+Использовать:
+- foreign keys;
+- unique constraints;
+- transactions;
+- idempotency records;
+- optimistic versioning там, где нужно.
+
+Критические race cases:
+- double generate;
+- double publish;
+- simultaneous edit;
+- duplicate webhook;
+- retry after timeout.
+
+======================================================================
+63. AUTOSAVE / VERSIONING
+======================================================================
+
+Редактор:
+- autosave;
+- version history для важных creative objects;
+- unsaved state protection.
+
+Версионировать:
+- script;
+- prompt;
+- scene;
+- video;
+- subtitle;
+- marketing plan.
+
+======================================================================
+64. CACHE POLICY
+======================================================================
+
+Кешировать безопасно:
+- public model metadata;
+- prompt templates;
+- platform rules where appropriate.
+
+Не кешировать как публичное:
+- private media;
+- secret settings;
+- personalized brand data.
+
+После изменения пользовательских данных stale cache не должен показывать чужую/старую версию.
+
+======================================================================
+65. PERFORMANCE TARGETS
+======================================================================
+
+UI:
+- dashboard должен быть usable быстро;
+- heavy WebGL lazy-load;
+- code splitting;
+- media thumbnails;
+- progressive loading;
+- virtualized long lists where appropriate.
+
+Long AI jobs:
+не держать HTTP request открытым бесконечно.
+Использовать async job + polling/events.
+
+======================================================================
+66. TESTING PYRAMID
+======================================================================
+
+Обязательные уровни:
+
+1. Unit tests
+2. Integration tests
+3. Contract tests для provider adapters
+4. Database tests
+5. API tests
+6. MCP tests
+7. Workflow tests
+8. Browser E2E tests
+9. Failure injection tests
+10. Security tests
+11. Visual/UI tests
+12. Production smoke tests
+
+======================================================================
+67. PROVIDER CONTRACT TESTS
+======================================================================
+
+Для каждого real adapter проверить:
+- auth;
+- health;
+- smallest valid request;
+- async status;
+- result retrieval;
+- invalid key;
+- invalid model;
+- unsupported parameter;
+- rate limit;
+- timeout;
+- provider error;
+- duplicate callback;
+- resume behavior.
+
+Если реальные API credentials отсутствуют:
+adapter не объявлять LIVE_VERIFIED.
+
+Статусы:
+IMPLEMENTED_NOT_LIVE_VERIFIED
+LIVE_VERIFIED
+DEGRADED
+DISABLED
+
+======================================================================
+68. E2E GOLDEN FLOW
+======================================================================
+
+Обязательный Golden Flow:
+
+1. Register.
+2. Login.
+3. Create brand.
+4. Enter business description.
+5. Add website.
+6. Analyze business.
+7. Review facts.
+8. Find trend.
+9. Adapt trend.
+10. Generate marketing plan.
+11. Create content item.
+12. Choose platform.
+13. Choose language.
+14. Generate image.
+15. Create 30-sec video.
+16. Generate scenes.
+17. Resume one interrupted scene.
+18. Generate Gemini TTS voice.
+19. Add subtitles.
+20. Add music.
+21. Add logo.
+22. Edit timeline.
+23. Approve.
+24. Schedule.
+25. Publish or reach correct platform-specific action-required state.
+26. Verify publishing status.
+27. Load analytics where available.
+
+Golden Flow должен проходить после каждого major release.
+
+======================================================================
+69. FAILURE INJECTION TESTS
+======================================================================
+
+Обязательно симулировать:
+- browser closes mid-generation;
+- backend restart;
+- worker restart;
+- provider timeout;
+- provider returns 500;
+- rate limit 429;
+- expired API key;
+- expired social token;
+- duplicate webhook;
+- late webhook;
+- webhook before polling completion;
+- DB temporary failure;
+- storage temporary failure;
+- scene 3 failure;
+- TTS failure after video ready;
+- publish request timeout after provider actually accepted request;
+- budget exceeded;
+- corrupted upload;
+- unsupported media.
+
+Ожидаемое поведение:
+- никаких дублей;
+- никаких скрытых повторных списаний;
+- данные не теряются;
+- Resume работает.
+
+======================================================================
+70. MANUAL MODE TESTS
+======================================================================
+
+Проверить:
+- пользователь может остановиться на каждом этапе;
+- изменение prompt не запускает generation само;
+- смена provider требует нового explicit generate;
+- approve не публикует;
+- publish выполняется только по явному действию.
+
+======================================================================
+71. AUTOPILOT TESTS
+======================================================================
+
+Проверить:
+- OFF действительно запрещает действие;
+- budget limit блокирует generation;
+- human approval блокирует publication;
+- forbidden platform не используется;
+- max content/day соблюдается;
+- retry limit соблюдается;
+- failed content не публикуется;
+- audit trail полный.
+
+======================================================================
+72. MCP TESTS
+======================================================================
+
+Проверить:
+- auth;
+- permission isolation;
+- read-only client не может generate;
+- draft client не может publish;
+- spend limit;
+- invalid input;
+- tool timeout;
+- job resume;
+- external AI не получает secrets;
+- MCP-created asset отображается в web UI.
+
+======================================================================
+73. SECURITY TESTS
+======================================================================
+
+Проверить минимум:
+- IDOR;
+- broken object authorization;
+- XSS;
+- CSRF where relevant;
+- SSRF;
+- malicious URL redirects;
+- malicious SVG;
+- oversized file;
+- unauthorized storage access;
+- secret exposure;
+- prompt injection;
+- MCP privilege escalation;
+- webhook spoofing.
+
+======================================================================
+74. I18N TESTS
+======================================================================
+
+Автоматически сканировать missing translation keys.
+
+Browser E2E на:
+- hy
+- ru
+- en
+
+Проверить critical workflows на всех трёх языках.
+
+======================================================================
+75. UI/UX VISUAL QA
+======================================================================
+
+На ключевых страницах проверять screenshots:
+- Login
+- Dashboard
+- Business Analyzer
+- Trend Agent
+- Planner
+- Image Studio
+- Video Editor
+- Voice
+- Avatar
+- Publishing
+- Settings
+- MCP
+
+Проверить:
+- clipping;
+- overlap;
+- hidden buttons;
+- z-index;
+- glass readability;
+- responsive;
+- loading state;
+- empty state;
+- errors.
+
+======================================================================
+76. CLOSED DEVELOPMENT LOOP
+======================================================================
+
+Для КАЖДОЙ фазы:
+
+PLAN
+→ IMPLEMENT
+→ TYPECHECK
+→ LINT
+→ UNIT TEST
+→ INTEGRATION TEST
+→ E2E
+→ REVIEW
+→ FIND DEFECTS
+→ FIX
+→ RE-RUN AFFECTED TESTS
+→ RE-RUN REGRESSION
+→ VERIFY
+→ MARK DONE
+
+Нельзя после FAIL перейти к следующей фазе,
+если ошибка блокирующая.
+
+======================================================================
+77. BUG FIX LOOP
+======================================================================
+
+Если найден bug:
+
+1. Reproduce.
+2. Record exact failure.
+3. Find root cause.
+4. Add regression test where possible.
+5. Apply minimal correct fix.
+6. Run targeted tests.
+7. Run related integration tests.
+8. Run broader regression.
+9. Verify UI manually/E2E.
+10. Close only after PASS.
+
+Не исправлять симптом, оставляя root cause.
+
+======================================================================
+78. AI OUTPUT QA LOOP
+======================================================================
+
+Для AI-generated content:
+
+GENERATE
+→ VALIDATE STRUCTURE
+→ BRAND CHECK
+→ FACT CHECK AGAINST BRAND DATA
+→ PLATFORM CHECK
+→ SAFETY CHECK
+→ QUALITY CHECK
+→ REPAIR IF NEEDED
+→ FINAL CANDIDATE
+
+Autopilot не должен бесконечно repair.
+
+Установить maximum repair attempts.
+
+После лимита:
+NEEDS_USER_ACTION.
+
+======================================================================
+79. VIDEO QA LOOP
+======================================================================
+
+После generation проверить:
+- expected duration;
+- video decodes;
+- no empty file;
+- correct resolution;
+- audio present if expected;
+- no accidental black frames;
+- scene order;
+- character continuity;
+- logo;
+- subtitles inside safe area;
+- voice/music balance;
+- final export playable.
+
+При дефекте:
+перегенерировать только нужный stage/scene, если возможно.
+
+======================================================================
+80. PUBLISHING QA LOOP
+======================================================================
+
+Перед publish:
+
+PRECHECK
+→ CONNECTION
+→ TOKEN
+→ MEDIA
+→ PLATFORM RULES
+→ APPROVAL
+→ SCHEDULE
+→ SUBMIT
+→ PROVIDER ID
+→ RECONCILE
+→ FINAL STATUS
+
+Не создавать duplicate post при uncertain response.
+
+Если timeout после submit:
+сначала reconciliation,
+потом retry.
+
+======================================================================
+81. PRODUCTION ENVIRONMENTS
+======================================================================
+
+Создать:
+- development
+- staging
+- production
+
+Раздельные:
+- DB;
+- storage;
+- API keys;
+- OAuth callbacks;
+- webhooks;
+- domains.
+
+Не тестировать destructive scenarios на production.
+
+======================================================================
+82. CI/CD
+======================================================================
+
+На каждый PR/commit по выбранной стратегии:
+- install;
+- typecheck;
+- lint;
+- unit;
+- integration subset;
+- build;
+- security checks;
+- E2E smoke where practical.
+
+Production deployment:
+только после green release gate.
+
+======================================================================
+83. PRODUCTION RELEASE GATE
+======================================================================
+
+Перед production:
+
+[ ] build PASS
+[ ] typecheck PASS
+[ ] lint PASS
+[ ] unit PASS
+[ ] integration PASS
+[ ] DB migrations PASS
+[ ] E2E Golden Flow PASS
+[ ] auth PASS
+[ ] i18n PASS
+[ ] responsive QA PASS
+[ ] security critical PASS
+[ ] provider adapter states documented
+[ ] social publishing verified where credentials/API permit
+[ ] MCP PASS
+[ ] resume PASS
+[ ] duplicate-prevention PASS
+[ ] budget limits PASS
+[ ] secret scan PASS
+[ ] production env configured
+[ ] monitoring configured
+[ ] rollback plan exists
+
+Если хотя бы один CRITICAL gate FAIL:
+PRODUCTION_READY = FALSE.
+
+======================================================================
+84. DEFINITION OF DONE
+======================================================================
+
+Функция считается DONE только если:
+- реализована end-to-end;
+- UI работает;
+- backend работает;
+- persistence работает;
+- authorization есть;
+- validation есть;
+- errors обрабатываются;
+- loading state есть;
+- tests есть;
+- tests PASS;
+- happy path проверен;
+- failure path проверен;
+- i18n проверен;
+- mobile/desktop проверены;
+- documentation обновлена;
+- no fake/mocked production behavior.
+
+======================================================================
+85. PRODUCTION READY DEFINITION
+======================================================================
+
+Проект можно назвать production-ready только когда:
+
+1. пользователь реально может зарегистрироваться;
+2. создать бренд;
+3. проанализировать бизнес;
+4. создать план;
+5. найти тренд;
+6. создать image;
+7. создать video;
+8. восстановить interrupted generation;
+9. создать TTS;
+10. использовать voice clone при подключённом supported provider;
+11. создать avatar при подключённом supported provider;
+12. добавить subtitles;
+13. добавить logo;
+14. добавить music;
+15. отредактировать материал;
+16. approve;
+17. schedule;
+18. publish там, где API это поддерживает;
+19. получить честный action-required status там, где direct publish недоступен;
+20. вызвать основные функции через MCP;
+21. Autopilot соблюдает policy;
+22. security gates пройдены;
+23. Golden Flow пройден.
+
+======================================================================
+86. IMPLEMENTATION PHASES
+======================================================================
+
+PHASE 0 — AUDIT / BASELINE
+- inspect repository;
+- map existing code;
+- no duplicate subsystems;
+- document architecture;
+- run existing tests;
+- establish baseline.
+
+PHASE 1 — FOUNDATION
+- auth;
+- DB;
+- storage;
+- i18n;
+- design system;
+- navigation;
+- provider registry foundation.
+
+PHASE 2 — BRAND INTELLIGENCE
+- brands;
+- onboarding;
+- website analysis;
+- Brand Memory.
+
+PHASE 3 — TREND + PLANNER
+- Trend Agent;
+- Marketing Planner;
+- Content Plan.
+
+PHASE 4 — PROMPTS + IMAGES
+- Prompt Copilot;
+- Prompt Library;
+- Image Provider adapters;
+- image studio.
+
+PHASE 5 — VIDEO CORE
+- Video Project;
+- scenes;
+- durable jobs;
+- checkpoints;
+- continuation;
+- FFmpeg assembly.
+
+PHASE 6 — AUDIO
+- Gemini TTS adapter;
+- TTS provider layer;
+- voice profiles;
+- voice cloning provider abstraction;
+- transcription;
+- subtitles.
+
+PHASE 7 — MUSIC + AVATAR
+- Music Provider;
+- Avatar Provider;
+- editor integration.
+
+PHASE 8 — EDITOR
+- timeline;
+- scene edits;
+- overlays;
+- logo;
+- subtitles;
+- audio.
+
+PHASE 9 — MANUAL / AUTOPILOT
+- mode switch;
+- policies;
+- cost limits;
+- approval.
+
+PHASE 10 — PUBLISHING
+- social connections;
+- scheduling;
+- provider adapters;
+- reconciliation.
+
+PHASE 11 — ANALYTICS
+- metrics;
+- feedback loop.
+
+PHASE 12 — MCP
+- server;
+- tools;
+- resources;
+- auth;
+- permissions;
+- audit.
+
+PHASE 13 — HARDENING
+- security;
+- failure injection;
+- performance;
+- accessibility;
+- i18n regression.
+
+PHASE 14 — PRODUCTION GATE
+- full regression;
+- staging smoke;
+- deployment;
+- monitoring;
+- rollback verification.
+
+======================================================================
+87. NO-DUPLICATION RULE
+======================================================================
+
+Перед созданием любого нового:
+- service;
+- adapter;
+- API route;
+- component;
+- DB entity;
+- provider registry;
+- queue;
+- prompt subsystem;
+
+сначала найди существующую реализацию.
+
+Переиспользуй или рефактори.
+Не создавай второй competing implementation.
+
+======================================================================
+88. NO-FAKE-COMPLETION RULE
+======================================================================
+
+Запрещено писать:
+DONE
+COMPLETE
+PRODUCTION READY
+
+если:
+- используется mock вместо реального production path;
+- API adapter не проверен и заявлен как verified;
+- кнопка существует, но backend не работает;
+- status hardcoded;
+- publication не подтверждена;
+- tests skipped;
+- build broken;
+- credentials отсутствуют и это скрыто.
+
+Используй честные статусы:
+
+IMPLEMENTED
+IMPLEMENTED_NOT_LIVE_VERIFIED
+LIVE_VERIFIED
+BLOCKED_EXTERNAL
+FAILED
+DEGRADED
+
+======================================================================
+89. WORK LOG / PROGRESS
+======================================================================
+
+После каждой фазы обновлять:
+- Completed
+- Changed files
+- Tests run
+- PASS/FAIL
+- Live integrations verified
+- Remaining blockers
+- Next phase
+
+Не писать длинный отчёт вместо реальной работы.
+
+======================================================================
+90. FINAL AUDIT LOOP
+======================================================================
+
+Когда все фазы завершены:
+
+Запустить полный аудит:
+
+A. Functional
+B. Cross-module synchronization
+C. Data integrity
+D. Security
+E. Auth
+F. Provider configuration
+G. Resume/recovery
+H. Duplicate prevention
+I. Cost controls
+J. UI/UX
+K. Mobile
+L. i18n
+M. MCP
+N. Publishing
+O. Analytics
+P. Accessibility
+Q. Performance
+R. Error handling
+S. Production deployment
+
+Для каждого найденного defect:
+
+REPRODUCE
+→ ROOT CAUSE
+→ FIX
+→ TARGETED TEST
+→ FULL RELEVANT REGRESSION
+
+Повторять до достижения release gate.
+
+======================================================================
+91. FINAL DELIVERABLE
+======================================================================
+
+В самом конце подготовить короткий технический отчёт:
+
+1. Architecture implemented
+2. Main modules
+3. Providers connected
+4. Providers live-verified
+5. Social platforms verified
+6. MCP status
+7. Tests and exact results
+8. Security gate
+9. Known external limitations
+10. Deployment URL/environment
+11. Rollback status
+12. Final production readiness status
+
+Финальная строка разрешена только в одном из двух вариантов:
+
+PRODUCTION_READY = TRUE
+
+или
+
+PRODUCTION_READY = FALSE
+
+Если FALSE:
+перечислить конкретные блокирующие причины.
+
+======================================================================
+92. ОСНОВНОЙ ПРИНЦИП РАБОТЫ
+======================================================================
+
+Не строй ՀայDev Marketing как коллекцию красивых страниц.
+
+Строй одну связанную систему, где:
+
+Brand Memory
+→ Trend Agent
+→ Marketing Planner
+→ Prompt Copilot
+→ Image/Video/Audio generation
+→ Editor
+→ Approval
+→ Scheduler
+→ Publishing
+→ Analytics
+→ Learning
+
+используют единые данные, единые provider abstractions, единый durable job engine,
+единый audit trail и единый permission/security layer.
+
+Веб-интерфейс, Autopilot и MCP являются тремя интерфейсами к ОДНОМУ application core.
+
+Никакой скрытой дублирующей бизнес-логики.
+
+======================================================================
+93. START COMMAND
+======================================================================
+
+Начни с PHASE 0.
+
+1. Полностью изучи текущий repository.
+2. Определи уже существующие функции.
+3. Запусти baseline tests/build/typecheck.
+4. Составь архитектурную карту.
+5. Найди дубли и технический долг.
+6. Не ломай работающие части.
+7. Создай implementation checklist по фазам 1–14.
+8. После этого начинай реализацию.
+9. После каждой фазы запускай Closed Development Loop.
+10. Продолжай до Production Release Gate.
+
+Не спрашивай подтверждение между фазами, если можешь безопасно продолжать сам.
+
+Если внешняя интеграция требует отсутствующий API key:
+- реализуй adapter полностью;
+- протестируй unit/contract части;
+- пометь IMPLEMENTED_NOT_LIVE_VERIFIED;
+- продолжай остальные независимые фазы;
+- не подменяй real verification mock-успехом.
+
+ЦЕЛЬ:
+ДОВЕСТИ ՀայDev Marketing ДО РЕАЛЬНОГО, СТАБИЛЬНОГО, БЕЗОПАСНОГО,
+ВОССТАНАВЛИВАЕМОГО И ПРОВЕРЯЕМОГО PRODUCTION-READY СОСТОЯНИЯ.

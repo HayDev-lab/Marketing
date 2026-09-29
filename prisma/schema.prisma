@@ -1,0 +1,627 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ AUTH ============
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String?
+  locale        String    @default("hy") // hy | ru | en
+  emailVerified Boolean   @default(false)
+  verifyToken   String?
+  resetToken    String?
+  resetExpires  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions           Session[]
+  brands             Brand[]
+  trends             Trend[]
+  contentItems       ContentItem[]
+  mediaAssets        MediaAsset[]
+  videoProjects      VideoProject[]
+  voiceProfiles      VoiceProfile[]
+  musicAssets        MusicAsset[]
+  subtitleTracks     SubtitleTrack[]
+  jobs               GenerationJob[]
+  providerConfigs    ProviderConfig[]
+  costEntries        CostLedger[]
+  auditLogs          AuditLog[]
+  autopilotPolicy    AutopilotPolicy?
+  publishingConns    PublishingConnection[]
+  scheduledPosts     ScheduledPost[]
+  promptTemplates    PromptTemplate[]
+  mcpTokens          McpToken[]
+  analyticsSnapshots AnalyticsSnapshot[]
+  insights           LearningInsight[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+}
+
+// ============ BRAND INTELLIGENCE ============
+
+model Brand {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  website     String?
+  description String?
+  industry    String?
+  geography   String?
+  languages   String?   // JSON array
+  stage       String    @default("DRAFT") // DRAFT | ANALYZED | READY
+  logoAssetId String?
+  metaJson    String?   // JSON: social profiles, extra materials
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  profile        BrandProfile?
+  facts          BusinessFact[]
+  products       Product[]
+  audiences      Audience[]
+  marketingPlans MarketingPlan[]
+  contentPlans   ContentPlan[]
+  contentItems   ContentItem[]
+  trends         Trend[]
+  videoProjects  VideoProject[]
+  imageGens      ImageGeneration[]
+  musicAssets    MusicAsset[]
+  costEntries    CostLedger[]
+  insights       LearningInsight[]
+}
+
+model BrandProfile {
+  id                   String   @id @default(cuid())
+  brandId              String   @unique
+  brand                Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  version              Int      @default(1)
+  summary              String?
+  positioning          String?
+  tone                 String?
+  usp                  String?  // JSON array
+  targetAudiences      String?  // JSON array
+  priceInfo            String?
+  opportunities        String?  // JSON array
+  risks                String?  // JSON array
+  contentOpportunities String?  // JSON array
+  brandVoiceJson       String?  // JSON: voice params
+  visualIdentityJson   String?  // JSON: palette, style
+  forbiddenClaims      String?  // JSON array
+  updatedAt            DateTime @updatedAt
+}
+
+model BusinessFact {
+  id              String   @id @default(cuid())
+  brandId         String
+  brand           Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  kind            String   // SOURCE_FACT | AI_INFERENCE | USER_PROVIDED
+  category        String   // product | service | audience | pricing | positioning | tone | geo | other
+  content         String
+  provenanceUrl   String?
+  provenanceTitle String?
+  evidence        String?
+  observedAt      DateTime?
+  confidence      Float    @default(0.5)
+  approved        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  brandId     String
+  brand       Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  price       String?
+  kind        String   @default("PRODUCT") // PRODUCT | SERVICE
+  createdAt   DateTime @default(now())
+}
+
+model Audience {
+  id          String  @id @default(cuid())
+  brandId     String
+  brand       Brand   @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  geo         String?
+  channels    String? // JSON array
+}
+
+// ============ TRENDS ============
+
+model Trend {
+  id                  String    @id @default(cuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId             String?
+  brand               Brand?    @relation(fields: [brandId], references: [id])
+  title               String
+  summary             String?
+  sourceName          String
+  sourceUrl           String
+  observedAt          DateTime
+  platform            String?
+  region              String?
+  language            String?
+  evidence            String?   // JSON array of evidence quotes
+  metricsJson         String?
+  status              String    @default("HYPOTHESIS") // VERIFIED_TREND | POPULAR_TOPIC | EMERGING_SIGNAL | HYPOTHESIS
+  confidence          Float     @default(0.5)
+  brandFitScore       Float?
+  brandFitReason      String?
+  suggestedAdaptation String?
+  risk                String?
+  concept             String?   // creative concept after adaptation
+  hook                String?
+  script              String?
+  createdAt           DateTime  @default(now())
+}
+
+// ============ PLANNING ============
+
+model MarketingPlan {
+  id             String   @id @default(cuid())
+  brandId        String
+  brand          Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  version        Int      @default(1)
+  objectivesJson String?
+  pillarsJson    String?
+  channelsJson   String?
+  funnelJson     String?
+  weeklyJson     String?
+  monthlyJson    String?
+  cadence        String?
+  kpisJson       String?
+  experimentsJson String?
+  campaignIdeasJson String?
+  lockedSections String   @default("[]") // JSON array of locked section keys
+  status         String   @default("DRAFT") // DRAFT | APPROVED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contentPlans ContentPlan[]
+}
+
+model ContentPlan {
+  id              String   @id @default(cuid())
+  brandId         String
+  brand           Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  marketingPlanId String?
+  marketingPlan   MarketingPlan? @relation(fields: [marketingPlanId], references: [id])
+  title           String
+  weekStart       DateTime?
+  itemsJson       String?  // JSON blueprint of planned items
+  status          String   @default("DRAFT")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contentItems ContentItem[]
+}
+
+// ============ CONTENT ============
+
+model ContentItem {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId         String
+  brand           Brand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  contentPlanId   String?
+  contentPlan     ContentPlan? @relation(fields: [contentPlanId], references: [id])
+  trendId         String?
+  title           String
+  platform        String    // instagram | tiktok | facebook | telegram
+  language        String    // hy | ru | en
+  contentType     String    // IMAGE_POST | VIDEO_REEL | STORY | CAROUSEL | POST
+  hook            String?
+  script          String?
+  caption         String?
+  prompt          String?
+  hashtags        String?
+  approvalState   String    @default("DRAFT") // DRAFT|GENERATING|READY_FOR_REVIEW|CHANGES_REQUESTED|APPROVED|SCHEDULED|PUBLISHED|FAILED
+  assetId         String?
+  videoProjectId  String?
+  metaJson        String?
+  contentVersion  Int       @default(1)
+  scheduledAt     DateTime?
+  publishedAt     DateTime?
+  publishedUrl    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  approvalEvents ApprovalEvent[]
+  scheduledPosts ScheduledPost[]
+  analytics      AnalyticsSnapshot[]
+}
+
+model ApprovalEvent {
+  id             String      @id @default(cuid())
+  contentItemId  String
+  contentItem    ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Cascade)
+  fromState      String
+  toState        String
+  actorType      String      @default("WEB_UI") // WEB_UI | MCP | AUTOPILOT | SYSTEM
+  note           String?
+  createdAt      DateTime    @default(now())
+}
+
+// ============ PROMPT LIBRARY ============
+
+model PromptTemplate {
+  id           String   @id @default(cuid())
+  userId       String?  // null = global seeded
+  user         User?    @relation(fields: [userId], references: [id])
+  niche        String
+  type         String   // IMAGE | VIDEO
+  title        String
+  body         String
+  platform     String?
+  language     String?
+  variablesJson String? // JSON array of variable names
+  tagsJson     String?
+  isFavorite   Boolean  @default(false)
+  isCustom     Boolean  @default(false)
+  usageCount   Int      @default(0)
+  version      Int      @default(1)
+  parentTemplateId String?
+  createdAt    DateTime @default(now())
+}
+
+// ============ MEDIA ============
+
+model MediaAsset {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId   String?
+  kind      String   // IMAGE | VIDEO | AUDIO | VOICE | SUBTITLE | LOGO | DOCUMENT | MUSIC
+  filename  String
+  mimeType  String
+  size      Int?
+  storageKey String  // path under /home/z/my-project/uploads
+  provider  String?
+  metaJson  String?
+  createdAt DateTime @default(now())
+}
+
+model ImageGeneration {
+  id             String   @id @default(cuid())
+  userId         String
+  brandId        String?
+  brand          Brand?   @relation(fields: [brandId], references: [id])
+  jobId          String?  @unique
+  prompt         String
+  compiledPrompt String?
+  provider       String
+  model          String
+  paramsJson     String?
+  refAssetId     String?
+  assetId        String?
+  status         String   @default("DRAFT")
+  cost           Float?
+  latencyMs      Int?
+  error          String?
+  createdAt      DateTime @default(now())
+}
+
+model VideoProject {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId        String?
+  brand          Brand?   @relation(fields: [brandId], references: [id])
+  contentItemId  String?
+  title          String
+  durationSec    Int      @default(30)
+  aspectRatio    String   @default("9:16")
+  language       String   @default("hy")
+  script         String?
+  shotPlanJson   String?
+  characterBibleJson String?
+  styleBibleJson String?
+  status         String   @default("DRAFT") // DRAFT|SCRIPT_READY|GENERATING|SCENES_READY|ASSEMBLED|FAILED
+  currentVersion Int      @default(1)
+  finalAssetId   String?
+  metaJson       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  scenes VideoScene[]
+}
+
+model VideoScene {
+  id               String   @id @default(cuid())
+  projectId        String
+  project          VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  order            Int
+  durationSec      Float    @default(5)
+  prompt           String
+  narration        String?
+  provider         String?
+  model            String?
+  status           String   @default("PENDING") // PENDING|QUEUED|GENERATING|COMPLETED|FAILED
+  assetId          String?
+  lastFrameAssetId String?
+  jobId            String?
+  cost             Float?
+  retries          Int      @default(0)
+  error            String?
+  version          Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model SubtitleTrack {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String?
+  contentItemId String?
+  language    String
+  format      String   @default("SRT") // SRT | VTT
+  content     String
+  styleJson   String?
+  createdAt   DateTime @default(now())
+}
+
+model VoiceProfile {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  kind           String   @default("NATIVE") // NATIVE | CLONE
+  provider       String
+  voiceId        String
+  language       String?
+  paramsJson     String?
+  consentStatus  String?  // for clones: GRANTED | PENDING | NOT_REQUIRED
+  consentEvidence String?
+  permittedUses  String?
+  status         String   @default("ACTIVE")
+  createdAt      DateTime @default(now())
+}
+
+model MusicAsset {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId     String?
+  brand       Brand?   @relation(fields: [brandId], references: [id])
+  title       String
+  lyrics      String?
+  stylePrompt String?
+  source      String?  // GENERATED | UPLOADED
+  provider    String?
+  assetId     String?
+  durationSec Float?
+  cost        Float?
+  metaJson    String?
+  createdAt   DateTime @default(now())
+}
+
+// ============ DURABLE JOB ENGINE ============
+
+model GenerationJob {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind           String    // LLM | IMAGE | VIDEO | TTS | MUSIC | TRANSCRIPTION | ANALYZE_SITE | TREND_SEARCH | PLAN | AUTOPILOT_CYCLE
+  provider       String
+  model          String?
+  providerJobId  String?
+  status         String    @default("DRAFT") // DRAFT|QUEUED|SUBMITTED|PROCESSING|WAITING_PROVIDER|RETRYING|COMPLETED|FAILED|CANCELLED|NEEDS_USER_ACTION
+  stage          String?
+  attempt        Int       @default(0)
+  maxAttempts    Int       @default(3)
+  inputHash      String?
+  idempotencyKey String?   @unique
+  inputJson      String?
+  outputJson     String?
+  resultAssetId  String?
+  cost           Float?
+  error          String?
+  checkpointJson String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  nextPollAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+// ============ PROVIDERS / COST / AUDIT ============
+
+model ProviderConfig {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerId    String   // zai-core, gemini-tts, elevenlabs, etc.
+  category      String   // LLM|Research|Image|Video|TTS|VoiceClone|Music|Avatar|Transcription|Publishing
+  enabled       Boolean  @default(true)
+  status        String   @default("IMPLEMENTED_NOT_LIVE_VERIFIED") // LIVE_VERIFIED|IMPLEMENTED_NOT_LIVE_VERIFIED|DEGRADED|DISABLED|BLOCKED_EXTERNAL
+  defaultModel  String?
+  fallbackModel String?
+  spendingLimit Float?
+  retryPolicyJson String?
+  metaJson      String?
+  lastHealthAt  DateTime?
+  lastHealthOk  Boolean?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, providerId])
+}
+
+model CostLedger {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId      String?
+  brand        Brand?   @relation(fields: [brandId], references: [id])
+  jobId        String?
+  provider     String
+  model        String?
+  capability   String
+  estimatedCost Float   @default(0)
+  actualCost   Float?
+  note         String?
+  createdAt    DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  actorType  String   @default("WEB_UI") // WEB_UI | MCP | AUTOPILOT | SYSTEM
+  actorId    String?
+  action     String
+  objectType String?
+  objectId   String?
+  summary    String?
+  metaJson   String?
+  createdAt  DateTime @default(now())
+}
+
+// ============ AUTOPILOT ============
+
+model AutopilotPolicy {
+  id                    String  @id @default(cuid())
+  userId                String  @unique
+  user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled               Boolean @default(false)
+  trendDiscovery        Boolean @default(true)
+  autoPlanning          Boolean @default(true)
+  autoGeneration        Boolean @default(false)
+  paidGeneration        Boolean @default(false)
+  autoScheduling        Boolean @default(false)
+  autoPublishing        Boolean @default(false)
+  humanApproval         Boolean @default(true)
+  platformsJson         String  @default("[\"instagram\",\"telegram\"]")
+  brandsJson            String  @default("[]")
+  languagesJson         String  @default("[\"hy\"]")
+  dailyBudget           Float   @default(5)
+  weeklyBudget          Float   @default(25)
+  monthlyBudget         Float   @default(75)
+  maxGenerationCost     Float   @default(1)
+  maxRetries            Int     @default(2)
+  maxContentPerDay      Int     @default(3)
+  postingWindowsJson    String  @default("[]")
+  forbiddenTopicsJson   String  @default("[]")
+  forbiddenClaimsJson   String  @default("[]")
+  minQualityThreshold   Float   @default(0.6)
+  updatedAt             DateTime @updatedAt
+}
+
+// ============ PUBLISHING ============
+
+model PublishingConnection {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform      String    // instagram | tiktok | facebook | telegram
+  accountName   String?
+  status        String    @default("NOT_CONNECTED") // NOT_CONNECTED | CONNECTED | TOKEN_EXPIRED | ERROR
+  mode          String    @default("NOT_AVAILABLE") // DIRECT_PUBLISH_AVAILABLE | DRAFT_TRANSFER_ONLY | USER_ACTION_REQUIRED | NOT_AVAILABLE
+  permissions   String?
+  tokenExpiresAt DateTime?
+  lastPublishAt DateTime?
+  metaJson      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([userId, platform])
+}
+
+model ScheduledPost {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId       String?
+  contentItemId String?
+  contentItem   ContentItem? @relation(fields: [contentItemId], references: [id])
+  connectionId  String?
+  platform      String
+  caption       String?
+  scheduledAt   DateTime
+  timezone      String    @default("Asia/Yerevan")
+  status        String    @default("READY") // DRAFT|READY|SCHEDULED|SUBMITTING|PROVIDER_ACCEPTED|PUBLISHED|ACTION_REQUIRED|FAILED|CANCELLED
+  providerJobId String?
+  preflightJson String?
+  error         String?
+  publishedUrl  String?
+  idempotencyKey String?  @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// ============ ANALYTICS / LEARNING ============
+
+model AnalyticsSnapshot {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contentItemId String?
+  contentItem   ContentItem? @relation(fields: [contentItemId], references: [id])
+  platform      String
+  views         Int      @default(0)
+  reach         Int      @default(0)
+  impressions   Int      @default(0)
+  likes         Int      @default(0)
+  comments      Int      @default(0)
+  shares        Int      @default(0)
+  saves         Int      @default(0)
+  clicks        Int      @default(0)
+  watchTimeSec  Int      @default(0)
+  completionRate Float   @default(0)
+  source        String   @default("MANUAL_ENTRY") // PLATFORM_API | MANUAL_ENTRY
+  collectedAt   DateTime @default(now())
+}
+
+model LearningInsight {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandId     String?
+  brand       Brand?   @relation(fields: [brandId], references: [id])
+  kind        String   @default("OBSERVED_DATA") // OBSERVED_DATA | AI_INTERPRETATION
+  dimension   String   // hook | duration | format | topic | platform | cta | visual_style
+  observation String
+  metricJson  String?
+  createdAt   DateTime @default(now())
+}
+
+// ============ MCP ============
+
+model McpToken {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  tokenHash     String    @unique
+  prefix        String
+  preset        String    @default("READ_ONLY") // READ_ONLY | CREATE_DRAFTS | EXECUTE_GENERATIONS | PUBLISH_ALLOWED
+  canUsePaidGeneration Boolean @default(false)
+  canSchedule   Boolean   @default(false)
+  canPublish    Boolean   @default(false)
+  canAccessVoiceProfiles Boolean @default(false)
+  maxSpend      Float     @default(0)
+  revoked       Boolean   @default(false)
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+}

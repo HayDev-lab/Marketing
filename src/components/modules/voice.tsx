@@ -1,0 +1,342 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { toast } from "sonner";
+import {
+  AudioLines, Loader2, Save, Music, UserSquare, Ban, History, BookmarkCheck,
+} from "lucide-react";
+import { useApp, pulseCore } from "@/lib/store";
+import { useI18n, api } from "@/lib/use-i18n";
+import { showStudioError } from "@/components/modules/image-studio";
+import { PROVIDER_REGISTRY } from "@/lib/ai/registry";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Slider } from "@/components/ui/slider";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const RECENT_KEY = "haydev-voice-recent";
+const PROFILES_KEY = "haydev-voice-profiles";
+
+interface Voice { id: string; title: string; language: string[] | string }
+interface TtsResponse { jobId: string; assetId: string; url: string }
+interface RecentVoice { assetId: string; url: string; text: string; voice: string; speed: number; ts: number }
+interface LocalProfile { id: string; name: string; voiceId: string; language: string; speed: number; ts: number }
+
+export function VoiceModule() {
+  const { t, locale } = useI18n();
+  const activeBrandId = useApp((s) => s.activeBrandId);
+
+  const [text, setText] = useState("");
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [voicesLoading, setVoicesLoading] = useState(true);
+  const [voicesBlocked, setVoicesBlocked] = useState(false);
+  const [voiceId, setVoiceId] = useState("tongtong");
+  const [speed, setSpeed] = useState(1);
+  const [generating, setGenerating] = useState(false);
+  const [lastResult, setLastResult] = useState<TtsResponse | null>(null);
+  const [recent, setRecent] = useState<RecentVoice[]>([]);
+  const [profiles, setProfiles] = useState<LocalProfile[]>([]);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // honest registry statuses (BLOCKED_EXTERNAL honesty is a product requirement)
+  const musicProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "elevenlabs");
+  const avatarProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "heygen");
+
+  const loadVoices = useCallback(async () => {
+    try {
+      const res = await api<{ voices: Voice[]; providerBlocked?: boolean }>("/api/generate/tts", {
+        method: "POST",
+        body: JSON.stringify({ action: "list_voices" }),
+      });
+      if (res.providerBlocked) {
+        setVoicesBlocked(true);
+      } else {
+        setVoices(res.voices ?? []);
+        if (res.voices?.length) setVoiceId(res.voices[0].id);
+      }
+    } catch {
+      /* voices stay empty */
+    } finally {
+      setVoicesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadVoices();
+    try {
+      const r = window.localStorage.getItem(RECENT_KEY);
+      if (r) setRecent(JSON.parse(r) as RecentVoice[]);
+      const p = window.localStorage.getItem(PROFILES_KEY);
+      if (p) setProfiles(JSON.parse(p) as LocalProfile[]);
+    } catch { /* corrupted storage — ignore */ }
+  }, [loadVoices]);
+
+  const persistRecent = (list: RecentVoice[]) => {
+    setRecent(list);
+    try {
+      window.localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 12)));
+    } catch { /* storage full — non-critical */ }
+  };
+
+  const generate = async () => {
+    if (!text.trim()) {
+      toast.warning(t("studio.voc.needText"));
+      return;
+    }
+    setGenerating(true);
+    setLastResult(null);
+    pulseCore("GENERATING");
+    try {
+      const res = await api<TtsResponse>("/api/generate/tts", {
+        method: "POST",
+        body: JSON.stringify({ text, voice: voiceId, speed, brandId: activeBrandId ?? undefined }),
+      });
+      setLastResult(res);
+      persistRecent([{ assetId: res.assetId, url: res.url, text, voice: voiceId, speed, ts: Date.now() }, ...recent]);
+      pulseCore("SUCCESS");
+      toast.success(t("common.success"));
+    } catch (err) {
+      pulseCore("ERROR");
+      showStudioError(t, err);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    if (!profileName.trim()) {
+      toast.warning(t("studio.voc.profileName"));
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      const profile = await api<{ id: string }>("/api/generate/tts", {
+        method: "POST",
+        body: JSON.stringify({ action: "save_voice_profile", name: profileName, voiceId, language: locale, params: { speed } }),
+      });
+      const local: LocalProfile = { id: profile.id, name: profileName, voiceId, language: locale, speed, ts: Date.now() };
+      const list = [local, ...profiles];
+      setProfiles(list);
+      try {
+        window.localStorage.setItem(PROFILES_KEY, JSON.stringify(list.slice(0, 20)));
+      } catch { /* non-critical */ }
+      setProfileOpen(false);
+      setProfileName("");
+      toast.success(t("studio.voc.profileSaved"));
+    } catch (err) {
+      showStudioError(t, err);
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-5">
+      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
+        <h1 className="text-xl font-semibold sm:text-2xl neon-text">{t("studio.voc.title")}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t("studio.voc.subtitle")}</p>
+      </motion.section>
+
+      <div className="grid gap-5 lg:grid-cols-5">
+        {/* TTS composer */}
+        <Card className="glass rounded-2xl lg:col-span-3">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AudioLines className="h-4 w-4 text-[var(--neon)]" /> {t("studio.voc.generate")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-5">
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="voc-text">{t("studio.voc.text")}</Label>
+                <span className={`text-[11px] ${text.length > 2000 ? "text-destructive" : "text-muted-foreground"}`}>
+                  {t("studio.voc.counter", { n: text.length })}
+                </span>
+              </div>
+              <Textarea
+                id="voc-text"
+                value={text}
+                onChange={(e) => setText(e.target.value.slice(0, 2000))}
+                placeholder={t("studio.voc.textPh")}
+                rows={7}
+                className="resize-none"
+                maxLength={2000}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="voc-voice">{t("studio.voc.voice")}</Label>
+              {voicesLoading ? (
+                <Skeleton className="h-11 rounded-lg bg-muted/40" />
+              ) : voices.length === 0 ? (
+                <p className="text-xs text-muted-foreground">{t("studio.voc.voicesEmpty")}</p>
+              ) : (
+                <Select value={voiceId} onValueChange={setVoiceId}>
+                  <SelectTrigger id="voc-voice" className="min-h-11 w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    {voices.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        {v.title}
+                        {Array.isArray(v.language) ? ` · ${v.language.join(", ")}` : typeof v.language === "string" ? ` · ${v.language}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="voc-speed">{t("studio.voc.speed")}</Label>
+                <span className="font-mono text-xs text-[var(--neon-2)]">{speed.toFixed(1)}×</span>
+              </div>
+              <Slider
+                id="voc-speed"
+                value={[speed]}
+                min={0.5}
+                max={2}
+                step={0.1}
+                onValueChange={(v) => setSpeed(v[0] ?? 1)}
+                aria-label={t("studio.voc.speed")}
+                className="w-full"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={generate} disabled={generating} className="min-h-11 flex-1 gap-2 font-semibold">
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
+                {generating ? t("studio.voc.generating") : t("studio.voc.generate")}
+              </Button>
+              <Button variant="outline" onClick={() => setProfileOpen(true)} disabled={!voices.length} className="min-h-11 gap-2">
+                <Save className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.voc.saveProfile")}
+              </Button>
+            </div>
+
+            {generating && <Skeleton className="h-14 rounded-xl bg-muted/40" />}
+            {lastResult && !generating && (
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="grid gap-2 rounded-xl border border-[var(--neon-2)]/40 bg-muted/20 p-4">
+                <span className="text-xs font-semibold uppercase tracking-wide text-[var(--neon-2)]">{t("studio.voc.result")}</span>
+                <audio controls src={lastResult.url} className="w-full" aria-label={t("studio.voc.result")} />
+              </motion.div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* right column: profiles + honest statuses */}
+        <div className="grid content-start gap-5 lg:col-span-2">
+          <Card className="glass rounded-2xl">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <BookmarkCheck className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.voc.profiles")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {profiles.length === 0 ? (
+                <p className="py-4 text-center text-xs text-muted-foreground">{t("studio.voc.profilesEmpty")}</p>
+              ) : (
+                <ul className="grid max-h-64 gap-2 overflow-y-auto scrollbar-thin">
+                  {profiles.map((p) => (
+                    <li key={p.id} className="flex items-center justify-between gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{p.name}</p>
+                        <p className="text-[11px] text-muted-foreground">{p.voiceId} · {p.language.toUpperCase()} · {p.speed.toFixed(1)}×</p>
+                      </div>
+                      <Badge variant="outline" className="shrink-0 text-[10px]">NATIVE</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* honest blocked capability cards */}
+          {[
+            { icon: Music, neon: "var(--neon-3)", title: t("studio.voc.music"), provider: musicProvider },
+            { icon: UserSquare, neon: "var(--neon)", title: t("studio.voc.avatar"), provider: avatarProvider },
+          ].map(({ icon: Icon, neon, title, provider }) => (
+            <Card key={title} className="glass rounded-2xl opacity-90">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                  <Icon className="h-4 w-4" style={{ color: neon }} /> {title}
+                  <Badge variant="destructive" className="gap-1 text-[10px]"><Ban className="h-3 w-3" /> {t("studio.voc.blocked")}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-2">
+                <p className="text-xs leading-relaxed text-muted-foreground">{t("studio.voc.blockedNote")}</p>
+                {provider?.statusNote && (
+                  <p className="rounded-lg border border-border/60 bg-muted/20 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                    {provider.status}: {provider.statusNote}
+                  </p>
+                )}
+                <Textarea disabled rows={2} placeholder={t("studio.voc.disabledHint")} aria-label={t("studio.voc.disabledHint")} className="resize-none opacity-50" />
+                <Button disabled className="min-h-11 gap-2 opacity-50">
+                  <Ban className="h-4 w-4" /> {t("common.generate")}
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      {/* recent voiceovers */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <History className="h-4 w-4 text-[var(--neon-2)]" /> {t("studio.voc.recent")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recent.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">{t("studio.voc.recentEmpty")}</p>
+          ) : (
+            <ul className="grid max-h-96 gap-2 overflow-y-auto scrollbar-thin">
+              {recent.map((r) => (
+                <li key={r.assetId} className="grid gap-2 rounded-xl border border-border/60 bg-muted/20 p-3 sm:grid-cols-[1fr_260px] sm:items-center">
+                  <div className="min-w-0">
+                    <p className="line-clamp-2 text-xs">{r.text}</p>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                      {r.voice} · {r.speed.toFixed(1)}× · {new Date(r.ts).toLocaleString()}
+                    </p>
+                  </div>
+                  <audio controls src={r.url} className="h-10 w-full" aria-label={t("studio.voc.recent")} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* save profile dialog */}
+      <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
+        <DialogContent className="glass-strong rounded-2xl border-border/60">
+          <DialogHeader>
+            <DialogTitle className="neon-text">{t("studio.voc.profileTitle")}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="voc-profile-name">{t("studio.voc.profileName")}</Label>
+            <Input id="voc-profile-name" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder={t("studio.voc.profileNamePh")} />
+            <p className="text-[11px] text-muted-foreground">
+              {t("studio.voc.voice")}: {voiceId} · {t("studio.voc.speed")}: {speed.toFixed(1)}× · {locale.toUpperCase()}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" className="min-h-11" onClick={() => setProfileOpen(false)}>{t("common.cancel")}</Button>
+            <Button className="min-h-11 gap-2" onClick={saveProfile} disabled={savingProfile}>
+              {savingProfile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {t("common.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
