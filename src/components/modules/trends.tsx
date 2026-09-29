@@ -60,7 +60,9 @@ export function TrendsModule() {
   const activeBrandId = useApp((s) => s.activeBrandId);
 
   const [brands, setBrands] = useState<BrandLite[]>([]);
-  const [brandId, setBrandId] = useState<string>("none");
+  // null = no explicit choice yet → derive from the active brand (effect-free, always in sync)
+  const [pickedBrandId, setPickedBrandId] = useState<string | null>(null);
+  const brandId = pickedBrandId ?? activeBrandId ?? "none";
   const [niche, setNiche] = useState("");
   const [region, setRegion] = useState("");
   const [language, setLanguage] = useState<string>(locale);
@@ -71,10 +73,7 @@ export function TrendsModule() {
   const [adaptingId, setAdaptingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // sync default brand + language when store changes
-  useEffect(() => {
-    if (activeBrandId) setBrandId(activeBrandId);
-  }, [activeBrandId]);
+  // keep trend language in sync with UI locale
   useEffect(() => {
     setLanguage(locale);
   }, [locale]);
@@ -176,7 +175,7 @@ export function TrendsModule() {
             >
               <div className="grid gap-1.5">
                 <Label htmlFor="tr-brand">{t("trends.brand")}</Label>
-                <Select value={brandId} onValueChange={setBrandId}>
+                <Select value={brandId} onValueChange={setPickedBrandId}>
                   <SelectTrigger id="tr-brand" className="h-11">
                     <SelectValue placeholder={t("trends.brandAny")} />
                   </SelectTrigger>

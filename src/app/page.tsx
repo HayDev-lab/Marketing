@@ -20,7 +20,6 @@ export default function Home() {
   const setUser = useApp((s) => s.setUser);
   const user = useApp((s) => s.user);
   const setActiveBrand = useApp((s) => s.setActiveBrand);
-  const activeBrandId = useApp((s) => s.activeBrandId);
   const setMode = useApp((s) => s.setMode);
 
   const bootstrap = useCallback(async () => {
@@ -29,7 +28,8 @@ export default function Home() {
       setUser(data.user);
       if (data.brands) {
         setBrands(data.brands);
-        if (data.brands.length && !activeBrandId) setActiveBrand(data.brands[0].id);
+        const { activeBrandId: current } = useApp.getState();
+        if (data.brands.length && !current) setActiveBrand(data.brands[0].id);
       }
       if (data.autopilotEnabled !== undefined) setMode(data.autopilotEnabled ? "autopilot" : "manual");
     } catch {
@@ -37,7 +37,7 @@ export default function Home() {
     } finally {
       setBooting(false);
     }
-  }, [activeBrandId, setActiveBrand, setMode, setUser]);
+  }, [setActiveBrand, setMode, setUser]);
 
   useEffect(() => {
     bootstrap();
