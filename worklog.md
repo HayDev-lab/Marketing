@@ -122,3 +122,23 @@ Stage Summary:
 - Приложение полностью функционально и верифицировано E2E; багфикс синка бренда надёжнее прежней реализации (не зависит от таймингов эффектов)
 - Новые фичи: Command Palette (power-user навигация) + cost sparkline (аналитика расходов)
 - Следующие кандидаты: календарная неделя для scheduled posts в Publishing, PWA manifest, onboarding-тур для новых пользователей, экспорт контент-пакета (ZIP), дедупликация бренд-фактов
+
+---
+Task ID: 6
+Agent: main (cron webDevReview #1)
+Task: QA-проход, фикс hydration-бага (nested button), PWA manifest, недельный календарь Publishing
+
+Work Log:
+- QA через agent-browser: обнаружен REAL hydration-баг «<button> cannot be a descendant of <button>» — PromptLibraryModule рендерил карточки-шаблоны как motion.button с тремя <Button> (favorite/copy/duplicate) внутри. Статический scan по всем модулям: аналогичные паттерны в brands/content/dashboard валидны (span role=button). ФИКС: motion.button → motion.div с role="button", tabIndex=0, onKeyDown Enter/Space, focus-visible ring — a11y сохранён. Верифицировано: 0 hydration ошибок после reload
+- НОВАЯ ФИЧА PWA: public/manifest.webmanifest (standalone, theme #0d0b14, категории, shortcuts Image/Content/Analytics с deep-link ?view=), иконки 512/192/apple-touch-180 сгенерированы из logo.svg (Playwright screenshot + PIL resize), layout.tsx: metadata.manifest + appleWebApp + icons; page.tsx bootstrap читает ?view= param (deep-link PWA шорткатов) с whitelist ViewId
+- НОВАЯ ФИЧА: Week board в Publishing — 7-дневная сетка Пн–Вс (Intl weekday по текущей локали), навигация prev/next/This week, сегодня подсвечен neon-border, чипы постов со статусными цветами + время + платформенная иконка, клик по чипу → диалог деталей (статус, preflight issues, reschedule через datetime-local, cancel, attempt publish) — переиспользует существующие handlers; reschedule(post, value) рефакторнут на явный параметр; мобильный layout: horizontal snap-scroll с auto-cols, десктоп: grid-cols-7
+- i18n: +7 ключей publishing.week* ×3 локали (hy/ru/en) через скрипт с anchor по scheduledPosts
+- Тестовый флоу создан через API: content draft → PATCH assetId (переиспользована генерация из Task 5) → READY_FOR_REVIEW → APPROVED → POST /api/schedule (завтра, preflight ok) → пост отображается на week board; deep-link /?view=publishing верифицирован
+- bun run lint 0 ошибок; tsc --noEmit 0 ошибок (вне examples/skills); dev.log зелёный
+
+Stage Summary:
+- Исправлен hydration-баг Prompt Library (invalid HTML nested buttons)
+- PWA: устанавливаемое приложение с иконками и шорткатами (deep links работают)
+- Publishing: визуальное недельное планирование с actions-диалогом
+- Демо-пост "Week board demo post" оставлен в календаре (завтра, SCHEDULED) — можно отменить через UI
+- Риски: нет; кандидаты next: onboarding-тур, экспорт контент-пакета, brand facts dedup, дашборд-виджет недели

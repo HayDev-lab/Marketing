@@ -24,8 +24,20 @@ export const metadata: Metadata = {
   title: "ՀայDev Marketing — AI Marketing Operating System",
   description:
     "Cloud-first AI Marketing OS: business intelligence, trends, planning, image/video/voice generation, approval, scheduling, publishing, analytics.",
+  applicationName: "HayDev MKT",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "HayDev MKT",
+  },
   icons: {
-    icon: "/logo.svg",
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+    shortcut: "/icon-192.png",
   },
 };
 

@@ -289,13 +289,16 @@ export function PromptLibraryModule() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.templates.map((tpl, i) => (
-            <motion.button
+            <motion.div
               key={tpl.id}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: Math.min(i * 0.03, 0.3) }}
+              role="button"
+              tabIndex={0}
               onClick={() => setDetail(tpl)}
-              className="glass glass-hover flex flex-col gap-2.5 rounded-2xl border border-border/60 p-4 text-left"
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDetail(tpl); } }}
+              className="glass glass-hover flex cursor-pointer flex-col gap-2.5 rounded-2xl border border-border/60 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--neon)]/60"
               aria-label={tpl.title}
             >
               <div className="flex flex-wrap items-center gap-1.5">
@@ -329,7 +332,7 @@ export function PromptLibraryModule() {
                   </Button>
                 </div>
               </div>
-            </motion.button>
+            </motion.div>
           ))}
         </div>
       )}

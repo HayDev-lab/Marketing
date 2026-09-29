@@ -19,6 +19,7 @@ import {
 import {
   Instagram, Music2, Facebook, Send, Link2, Unlink, CalendarClock, TriangleAlert,
   Download, RefreshCw, Loader2, CircleAlert, ClipboardCheck, Hand,
+  CalendarRange, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { PlatformIcon } from "@/components/modules/content";
 
@@ -68,7 +69,7 @@ function postStatusAccent(status: string): { style?: React.CSSProperties; classN
 
 // ===== main module =====
 export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   const [connections, setConnections] = useState<Connection[] | null>(null);
   const [posts, setPosts] = useState<ScheduledPost[] | null>(null);
@@ -94,6 +95,11 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
   const [busyPost, setBusyPost] = useState<string | null>(null);
   const [rescheduleId, setRescheduleId] = useState<string | null>(null);
   const [rescheduleValue, setRescheduleValue] = useState("");
+
+  // week board
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [weekPostId, setWeekPostId] = useState<string | null>(null);
+  const [weekReschedValue, setWeekReschedValue] = useState("");
 
   const loadConnections = useCallback(async () => {
     try {
@@ -206,14 +212,14 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
     }
   };
 
-  const reschedule = async (post: ScheduledPost) => {
-    if (!rescheduleValue || isNaN(new Date(rescheduleValue).getTime())) {
+  const reschedule = async (post: ScheduledPost, value: string) => {
+    if (!value || isNaN(new Date(value).getTime())) {
       toast.warning(t("publishing.newDateTime"), { description: t("publishing.err.default") });
       return;
     }
     setBusyPost(post.id);
     try {
-      const updated = await api<ScheduledPost>(`/api/schedule/${post.id}`, { method: "PATCH", body: JSON.stringify({ action: "reschedule", scheduledAt: new Date(rescheduleValue).toISOString() }) });
+      const updated = await api<ScheduledPost>(`/api/schedule/${post.id}`, { method: "PATCH", body: JSON.stringify({ action: "reschedule", scheduledAt: new Date(value).toISOString() }) });
       setPosts((prev) => (prev ?? []).map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
       setRescheduleId(null);
       toast.success(t("publishing.rescheduled"));
@@ -247,6 +253,31 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
     for (const c of connections ?? []) map[c.platform] = c;
     return map;
   }, [connections]);
+
+  // week board data: Monday..Sunday of the selected week, local-date bucketed
+  const weekDays = useMemo(() => {
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7) + weekOffset * 7);
+    return Array.from({ length: 7 }, (_, i) => new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i));
+  }, [weekOffset]);
+  const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const postsByDay = useMemo(() => {
+    const map: Record<string, ScheduledPost[]> = {};
+    for (const p of posts ?? []) {
+      const k = dayKey(new Date(p.scheduledAt));
+      (map[k] ??= []).push(p);
+    }
+    for (const k of Object.keys(map)) map[k].sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+    return map;
+  }, [posts]);
+  const todayKey = dayKey(new Date());
+  const weekLabel = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" });
+    return `${fmt.format(weekDays[0])} — ${fmt.format(weekDays[6])}`;
+  }, [weekDays, locale]);
+  const weekdayFmt = useMemo(() => new Intl.DateTimeFormat(locale, { weekday: "short" }), [locale]);
+  const timeFmt = useMemo(() => new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }), [locale]);
+  const liveWeekPost = (posts ?? []).find((p) => p.id === weekPostId) ?? null;
 
   return (
     <div className="grid gap-5">
@@ -348,6 +379,78 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
         </motion.div>
       )}
 
+      {/* week board */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <CalendarRange className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("publishing.weekBoard")}
+          </CardTitle>
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="icon" className="h-9 w-9" aria-label={t("publishing.weekPrev")} onClick={() => setWeekOffset((w) => w - 1)}>
+              <ChevronLeft className="h-4 w-4" aria-hidden />
+            </Button>
+            <span className="min-w-[118px] text-center text-xs font-medium text-muted-foreground" aria-live="polite">{weekLabel}</span>
+            <Button variant="outline" size="icon" className="h-9 w-9" aria-label={t("publishing.weekNext")} onClick={() => setWeekOffset((w) => w + 1)}>
+              <ChevronRight className="h-4 w-4" aria-hidden />
+            </Button>
+            {weekOffset !== 0 && (
+              <Button variant="ghost" size="sm" className="min-h-9 text-xs" onClick={() => setWeekOffset(0)}>{t("publishing.thisWeek")}</Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-2">
+          <p className="text-xs text-muted-foreground">{t("publishing.weekHint")}</p>
+          <div
+            className="grid grid-flow-col auto-cols-[minmax(138px,1fr)] gap-2 overflow-x-auto pb-1 scrollbar-thin sm:auto-cols-fr sm:grid-flow-row sm:grid-cols-7"
+            role="table"
+            aria-label={t("publishing.weekBoard")}
+          >
+            {weekDays.map((d) => {
+              const k = dayKey(d);
+              const dayPosts = postsByDay[k] ?? [];
+              const isToday = k === todayKey;
+              return (
+                <div
+                  key={k}
+                  role="row"
+                  className={`flex min-h-24 flex-col gap-1.5 rounded-xl border p-2 ${isToday ? "neon-border bg-[var(--neon)]/[0.06]" : "border-border/60 bg-muted/20"}`}
+                >
+                  <div className="flex items-baseline justify-between gap-1">
+                    <span className={`text-[11px] font-semibold capitalize ${isToday ? "text-[var(--neon)]" : "text-muted-foreground"}`}>
+                      {weekdayFmt.format(d)}
+                    </span>
+                    <span className={`text-[11px] ${isToday ? "font-bold text-[var(--neon)]" : "text-muted-foreground"}`}>{d.getDate()}</span>
+                  </div>
+                  {dayPosts.length === 0 ? (
+                    <span className="text-[10px] text-muted-foreground/50">—</span>
+                  ) : (
+                    dayPosts.map((p) => {
+                      const accent = postStatusAccent(p.status);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => { setWeekPostId(p.id); setWeekReschedValue(toLocalInput(new Date(p.scheduledAt))); }}
+                          className={`w-full rounded-lg border px-1.5 py-1 text-left transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--neon)]/60 ${accent.className ?? ""}`}
+                          style={accent.style}
+                          aria-label={`${new Date(p.scheduledAt).toLocaleTimeString()} · ${p.contentItem?.title ?? p.platform}`}
+                        >
+                          <span className="flex items-center gap-1 text-[10px] font-semibold opacity-90">
+                            <PlatformIcon platform={p.platform} className="h-3 w-3 shrink-0" />
+                            {timeFmt.format(new Date(p.scheduledAt))}
+                          </span>
+                          <span className="line-clamp-2 text-[11px] leading-tight">{p.contentItem?.title ?? p.platform}</span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* scheduled posts */}
       <Card className="glass rounded-2xl">
         <CardHeader className="flex-row items-center justify-between pb-2">
@@ -398,7 +501,7 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
                       {rescheduleId === p.id ? (
                         <div className="flex flex-wrap items-center gap-2">
                           <Input type="datetime-local" value={rescheduleValue} onChange={(e) => setRescheduleValue(e.target.value)} className="min-h-11 w-56 text-xs" aria-label={t("publishing.newDateTime")} />
-                          <Button size="sm" className="min-h-11" disabled={busyPost === p.id} onClick={() => reschedule(p)}>{t("publishing.rescheduleBtn")}</Button>
+                          <Button size="sm" className="min-h-11" disabled={busyPost === p.id} onClick={() => reschedule(p, rescheduleValue)}>{t("publishing.rescheduleBtn")}</Button>
                           <Button size="sm" variant="ghost" className="min-h-11" onClick={() => setRescheduleId(null)}>{t("common.cancel")}</Button>
                         </div>
                       ) : (
@@ -512,6 +615,73 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
               </>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* week post details dialog */}
+      <Dialog open={liveWeekPost !== null} onOpenChange={(o) => { if (!o) setWeekPostId(null); }}>
+        <DialogContent className="sm:max-w-md">
+          {liveWeekPost && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <CalendarRange className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("publishing.weekDetails")}
+                </DialogTitle>
+                <DialogDescription className="line-clamp-2">{liveWeekPost.contentItem?.title ?? liveWeekPost.platform}</DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="gap-1 text-[10px]"><PlatformIcon platform={liveWeekPost.platform} /> {liveWeekPost.platform}</Badge>
+                  {(() => { const a = postStatusAccent(liveWeekPost.status); return (
+                    <Badge variant="outline" className={`text-[10px] ${a.className ?? ""}`} style={a.style}>{liveWeekPost.status}</Badge>
+                  ); })()}
+                  <span className="text-xs text-muted-foreground">{new Date(liveWeekPost.scheduledAt).toLocaleString()} · {liveWeekPost.timezone}</span>
+                </div>
+
+                {(() => {
+                  let preflight: { ok: boolean; issues: string[] } | null = null;
+                  if (liveWeekPost.preflightJson) { try { preflight = JSON.parse(liveWeekPost.preflightJson); } catch { preflight = null; } }
+                  return preflight && !preflight.ok ? (
+                    <div className="text-[11px] text-destructive" role="alert">
+                      <p className="flex items-center gap-1 font-medium"><CircleAlert className="h-3.5 w-3.5" aria-hidden /> {t("publishing.preflightIssues")}</p>
+                      <ul className="mt-1 list-inside list-disc space-y-0.5">
+                        {preflight.issues.map((iss, k) => <li key={k}>{iss}</li>)}
+                      </ul>
+                    </div>
+                  ) : null;
+                })()}
+
+                <div className="grid gap-1.5">
+                  <Label htmlFor="wk-resched">{t("publishing.weekNewTime")}</Label>
+                  <Input
+                    id="wk-resched"
+                    type="datetime-local"
+                    value={weekReschedValue}
+                    onChange={(e) => setWeekReschedValue(e.target.value)}
+                    className="min-h-11 text-xs"
+                  />
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    className="min-h-11"
+                    disabled={busyPost === liveWeekPost.id}
+                    onClick={() => reschedule(liveWeekPost, weekReschedValue)}
+                  >
+                    {busyPost === liveWeekPost.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <CalendarClock className="h-4 w-4" aria-hidden />}
+                    {t("publishing.rescheduleBtn")}
+                  </Button>
+                  <Button size="sm" variant="outline" className="min-h-11" disabled={busyPost === liveWeekPost.id} onClick={() => cancelPost(liveWeekPost)}>
+                    {t("publishing.cancelPost")}
+                  </Button>
+                  <Button size="sm" className="min-h-11" disabled={busyPost === liveWeekPost.id} onClick={() => { setWeekPostId(null); attemptPublish(liveWeekPost); }}>
+                    {busyPost === liveWeekPost.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ClipboardCheck className="h-4 w-4" aria-hidden />}
+                    {t("publishing.attemptPublish")}
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

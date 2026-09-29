@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useApp, type SessionUser } from "@/lib/store";
+import { useApp, type SessionUser, type ViewId } from "@/lib/store";
 import { api } from "@/lib/use-i18n";
 import { AuthView } from "@/components/auth-view";
 import { AppShell } from "@/components/app-shell";
@@ -24,6 +24,12 @@ export default function Home() {
 
   const bootstrap = useCallback(async () => {
     try {
+      // PWA app-shortcut deep link: /?view=image|content|analytics…
+      const paramView = new URLSearchParams(window.location.search).get("view");
+      if (paramView) {
+        const valid: ViewId[] = ["dashboard", "brands", "trends", "planner", "content", "prompts", "image", "video", "voice", "publishing", "analytics", "settings", "mcp"];
+        if (valid.includes(paramView as ViewId)) useApp.getState().setView(paramView as ViewId);
+      }
       const data = await api<MeResponse>("/api/auth/me");
       setUser(data.user);
       if (data.brands) {
