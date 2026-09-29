@@ -142,3 +142,26 @@ Stage Summary:
 - Publishing: визуальное недельное планирование с actions-диалогом
 - Демо-пост "Week board demo post" оставлен в календаре (завтра, SCHEDULED) — можно отменить через UI
 - Риски: нет; кандидаты next: onboarding-тур, экспорт контент-пакета, brand facts dedup, дашборд-виджет недели
+
+---
+Task ID: 7
+Agent: main (cron webDevReview #2)
+Task: QA-проход #2 + 4 новые фичи (onboarding-тур, экспорт контент-пакета, дедуп фактов, week-виджет) + стайлинг-полиш
+
+Work Log:
+- QA через agent-browser: все 13 views рендерятся, консоль чистая (0 ошибок), hydration-ошибок нет, ⌘K палитра работает, deep-links ?view= работают с корректными ID (image/video/voice/prompts — не studio-*). Блокирующих багов не найдено → перешёл к фичам
+- НОВАЯ ФИЧА: Onboarding-тур (src/components/onboarding-tour.tsx) — 7 шагов со спотлайт-подсветкой целевых элементов: приветствие (центр) → навигация [data-tour=nav] → активный бренд [data-tour=brand] → режим Manual/Autopilot [data-tour=mode] → командный пульт [data-tour=palette] → честность по дизайну (центр) → финал (центр). Механика: DOMRect таргета + box-shadow 0 0 0 9999px вырезает «прожектор», карточка позиционируется под/над таргетом с клампом во вьюпорт; graceful fallback в центр если таргет скрыт (мобайл: nav x=-240 → центр, проверено на 390px). Автостарт при первом визите (localStorage haydev-tour-done, lazy useState init — без setState в эффекте, react-hooks/set-state-in-effect чист); replay из футера (кнопка «Тур» с LifeBuoy, window event haydev:tour); Escape/стрелки/клик по точкам прогресса; a11y role=dialog aria-modal, aria-selected точки
+- НОВАЯ ФИЧА: Экспорт контент-пакета в Content (content.tsx) — DropdownMenu в детальном диалоге: «Копировать Markdown» (clipboard с fallback на скачивание), «Скачать .md», «Скачать .json». Markdown: заголовок, метаданные (бренд/платформа/тип/язык/статус/версия), hook/caption/hashtags/script, видео-сцены по порядку, ссылка на media-ассет; JSON: полный detail + brand + assetUrl + exportedAt. safeFileStem поддерживает армянские/кириллические символы; тосты exportCopied/exportDone
+- НОВАЯ ФИЧА: Дедупликация бренд-фактов (brands.tsx) — useMemo-группа по нормализованному тексту (lowercase + collapse whitespace): дубликаты подсвечены amber-рамкой + бейдж «×N» (размер группы), кнопка «Убрать дубликаты» в шапке фактов (появляется только при наличии дублей) удаляет старые копии через DELETE /api/brands/[id]/facts (новейшая остаётся), тост brands.dedupDone с числом
+- НОВАЯ ФИЧА: «Моя неделя» на Dashboard — 7-дневная полоса (Пн..Вс по Intl локали): ячейки-кнопки с датой + неоновые точки постов (до 3 + «+N»), сегодняшний день подсвечен neon-border, клик → view publishing; scheduled теперь полный список (slice(0,5) только для списка «следующие публикации»)
+- СТАЙЛИНГ: globals.css + — .focus-glow (неоновый focus-visible ring для glass-элементов), .shimmer (бегущий блик на скелетонах dashboard), .gradient-hr, .heading-accent (неоновая вертикальная риска у секционных заголовков), глобальный стиль kbd (кностям ⌘K); app-shell — focus-glow на nav-кнопках и селекторах, иконки навигации micro-scale на hover (group/nav)
+- i18n: core.ts +33 ключа (tour.* 30 + dash.week/weekEmpty), publishing.ts +18 (content.export* 6), brands.ts +12 (brands.dedup* 4) — все ×3 локали, parity-проверка скриптом: 399/357/228 = 133×3/119×3/76×3 PARITY-OK
+- Верификация браузером: тур автостарт (Шаг 1 из 7) → спотлайты на nav/brand/mode/palette с корректными координатами (S3 x=1084, S4 x=374, S5 x=872) → «Начать работу» закрывает и пишет флаг; replay из футера переоткрывает на шаге 1; mobile 390px — центр без спотлайта; week-виджет 7 ячеек + точка демо-поста, клик уводит в Publishing; export-меню 3 пункта, «Скачать .md» → тост «Пакет готов»; дедуп: созданы 2 near-dupe факта через API → ×2 бейдж + кнопка → тост «Удалено дубликатов: 1» → UI чист; тестовые данные убраны (QA-факт удалён, Tour-флаг сброшен не был — автостарт не повторится)
+- bun run lint → 0 ошибок; bunx tsc --noEmit → 0 ошибок (вне pre-existing examples/skills); dev.log зелёный
+
+Stage Summary:
+- 4 новые фичи: onboarding-тур со спотлайтом (replayable), экспорт контент-пакета (MD/JSON/clipboard), дедуп бренд-фактов (×N + cleanup), week-виджет на дашборде
+- Стайлинг-полиш: focus-glow, shimmer-скелетоны, heading-accent, kbd-стиль, nav micro-анимации
+- Скриншоты: tool-results/qa-week-widget.png, qa-export-menu.png, qa-export-toast.png, qa-dedup.png
+- Риски: нет известных; тур-флаг уже записан у тестового пользователя (автостарт не повторится — это ожидаемо)
+- Кандидаты next: экспорт всей контент-кампании (multi-item ZIP), drag-and-drop в week board Publishing, тёмная/светлая тема toggle, A/B варианты постов, интеграция ASR в голосовой модуль

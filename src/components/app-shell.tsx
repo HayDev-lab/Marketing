@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
 import { CommandPalette, openCommandPalette } from "@/components/command-palette";
+import { OnboardingTour, openOnboardingTour } from "@/components/onboarding-tour";
+import { LifeBuoy } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key: string }[] = [
@@ -110,7 +112,7 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
             <span className="hidden text-xs font-medium tracking-wide text-muted-foreground sm:inline">{t(`state.${coreState}` as const)}</span>
           </div>
 
-          <div className="mx-auto flex items-center gap-1.5 rounded-full glass px-1 py-1" role="radiogroup" aria-label="Mode">
+          <div className="mx-auto flex items-center gap-1.5 rounded-full glass px-1 py-1" role="radiogroup" aria-label="Mode" data-tour="mode">
             {(["manual", "autopilot"] as const).map((m) => (
               <button
                 key={m}
@@ -129,16 +131,17 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
 
           <button
             onClick={openCommandPalette}
-            className="hidden h-9 items-center gap-2 rounded-full glass px-3 text-xs text-muted-foreground transition-colors hover:text-foreground md:inline-flex"
+            data-tour="palette"
+            className="hidden h-9 items-center gap-2 rounded-full glass px-3 text-xs text-muted-foreground transition-colors hover:text-foreground focus-glow md:inline-flex"
             aria-label="Open command palette"
           >
             <Search className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />
             <span className="hidden lg:inline">{t("cmd.title")}</span>
             <kbd className="rounded border border-border/80 bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">⌘K</kbd>
           </button>
-          <div className="hidden items-center gap-2 md:flex">
+          <div className="hidden items-center gap-2 md:flex" data-tour="brand">
             <Select value={activeBrandId ?? ""} onValueChange={setActiveBrand}>
-              <SelectTrigger className="h-9 w-[170px] text-xs" aria-label="Active brand">
+              <SelectTrigger className="h-9 w-[170px] text-xs focus-glow" aria-label="Active brand">
                 <SelectValue placeholder={t("dash.noBrand")} />
               </SelectTrigger>
               <SelectContent>
@@ -174,7 +177,7 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
           )}
         >
           <ScrollArea className="h-[calc(100vh-8rem)] lg:h-[calc(100vh-7rem)]">
-            <nav className="grid gap-1 p-3" aria-label="Main">
+            <nav className="grid gap-1 p-3" aria-label="Main" data-tour="nav">
               {NAV.map(({ id, icon: Icon, key }) => (
                 <button
                   key={id}
@@ -184,13 +187,13 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
                   }}
                   aria-current={view === id ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all",
+                    "focus-glow flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all group/nav",
                     view === id
                       ? "glass text-foreground neon-border shadow-[0_0_20px_oklch(0.72_0.19_315/0.15)]"
                       : "text-muted-foreground hover:bg-[var(--accent)] hover:text-foreground"
                   )}
                 >
-                  <Icon className={cn("h-4 w-4", view === id && "text-[var(--neon)]")} />
+                  <Icon className={cn("h-4 w-4 transition-transform group-hover/nav:scale-110", view === id && "text-[var(--neon)]")} />
                   {t(key)}
                 </button>
               ))}
@@ -218,7 +221,17 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
       {/* Sticky footer */}
       <footer className="mt-auto border-t border-border/70 bg-background/70 backdrop-blur-xl">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-[11px] text-muted-foreground sm:px-6">
-          <span>© {new Date().getFullYear()} ՀայDev Marketing — {t("app.tagline")}</span>
+          <span className="flex items-center gap-3">
+            <span>© {new Date().getFullYear()} ՀայDev Marketing — {t("app.tagline")}</span>
+            <button
+              onClick={openOnboardingTour}
+              className="focus-glow inline-flex items-center gap-1 rounded-full px-2 py-1 transition hover:bg-muted hover:text-foreground"
+              aria-label={t("tour.replay")}
+            >
+              <LifeBuoy className="h-3 w-3" aria-hidden />
+              {t("tour.replay")}
+            </button>
+          </span>
           <span className="flex items-center gap-3">
             <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-2)] status-dot text-[var(--neon-2)]" />AI Core: cloud</span>
             <span className="hidden sm:inline">{user?.email}</span>
@@ -228,6 +241,9 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
 
       {/* Global command palette (⌘K / Ctrl+K, G-to-jump) */}
       <CommandPalette />
+
+      {/* First-visit onboarding tour (replayable from footer) */}
+      <OnboardingTour />
     </div>
   );
 }

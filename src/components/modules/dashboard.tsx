@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useApp } from "@/lib/store";
 import { useI18n, api } from "@/lib/use-i18n";
@@ -73,7 +73,7 @@ function cnSpark(cost: number): string {
 }
 
 export function DashboardModule() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const setView = useApp((s) => s.setView);
   const user = useApp((s) => s.user);
   const activeBrandId = useApp((s) => s.activeBrandId);
@@ -91,7 +91,7 @@ export function DashboardModule() {
         api<unknown[]>(`/api/content${activeBrandId ? `?brandId=${activeBrandId}` : ""}`),
         api<{ id: string }[]>("/api/brands"),
       ]);
-      setData({ jobs, trends: trends.slice(0, 5), scheduled: scheduled.slice(0, 5), costs, contentCount: content.length, brandCount: brandsList.length });
+      setData({ jobs, trends: trends.slice(0, 5), scheduled, costs, contentCount: content.length, brandCount: brandsList.length });
     } catch {
       // dashboard stays usable; empty states show
     } finally {
@@ -106,6 +106,25 @@ export function DashboardModule() {
   }, [load]);
 
   const activeJobs = data?.jobs.filter((j) => ["QUEUED", "PROCESSING", "WAITING_PROVIDER", "RETRYING"].includes(j.status)) ?? [];
+
+  // ---- "My week" strip: bucket upcoming scheduled posts into the next 7 local days ----
+  const weekDays = useMemo(() => {
+    const fmtDay = new Intl.DateTimeFormat(locale, { weekday: "short" });
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      const next = new Date(d);
+      next.setDate(next.getDate() + 1);
+      const posts = (data?.scheduled ?? []).filter((p) => {
+        const at = new Date(p.scheduledAt);
+        return at >= d && at < next;
+      });
+      return { date: d, label: fmtDay.format(d), posts, isToday: i === 0 };
+    });
+  }, [data?.scheduled, locale]);
+  const weekHasPosts = weekDays.some((d) => d.posts.length > 0);
 
   return (
     <div className="grid gap-5">
@@ -128,7 +147,7 @@ export function DashboardModule() {
 
       {/* quick actions */}
       <section aria-label={t("dash.quickActions")}>
-        <h2 className="mb-3 text-sm font-medium tracking-wide text-muted-foreground">{t("dash.quickActions")}</h2>
+        <h2 className="heading-accent mb-3 text-sm font-medium tracking-wide text-muted-foreground">{t("dash.quickActions")}</h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {QUICK.map(({ view, icon: Icon, key, neon }, i) => (
             <motion.button
@@ -148,6 +167,54 @@ export function DashboardModule() {
         </div>
       </section>
 
+      {/* my week — 7-day publishing strip */}
+      <section aria-label={t("dash.week")}>
+        <h2 className="heading-accent mb-3 text-sm font-medium tracking-wide text-muted-foreground">{t("dash.week")}</h2>
+        <Card className="glass rounded-2xl">
+          <CardContent className="p-4">
+            {!data ? (
+              <Skeleton className="h-20 rounded-xl bg-muted/40 shimmer" />
+            ) : !weekHasPosts ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">{t("dash.weekEmpty")}</p>
+            ) : (
+              <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                {weekDays.map((d) => (
+                  <button
+                    key={d.date.toISOString()}
+                    onClick={() => setView("publishing")}
+                    className={`focus-glow group flex min-h-20 flex-col items-center gap-1.5 rounded-xl border px-1 py-2 transition-all hover:-translate-y-0.5 ${
+                      d.isToday
+                        ? "border-[var(--neon)]/50 bg-[var(--neon)]/10 neon-border"
+                        : "border-border/60 bg-muted/20 hover:border-[var(--neon)]/40"
+                    }`}
+                    aria-label={`${d.label}, ${d.posts.length} posts`}
+                  >
+                    <span className={`text-[10px] font-semibold uppercase tracking-wide ${d.isToday ? "text-[var(--neon)]" : "text-muted-foreground"}`}>
+                      {d.label}
+                    </span>
+                    <span className="text-sm font-medium tabular-nums">{d.date.getDate()}</span>
+                    <span className="flex flex-wrap items-center justify-center gap-0.5">
+                      {d.posts.slice(0, 3).map((p) => (
+                        <span
+                          key={p.id}
+                          title={p.contentItem?.title ?? p.platform}
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{
+                            background: p.status === "PUBLISHED" ? "var(--neon-2)" : "var(--neon)",
+                            boxShadow: `0 0 6px ${p.status === "PUBLISHED" ? "var(--neon-2)" : "var(--neon)"}`,
+                          }}
+                        />
+                      ))}
+                      {d.posts.length > 3 && <span className="text-[9px] font-medium text-muted-foreground">+{d.posts.length - 3}</span>}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
       <div className="grid gap-5 lg:grid-cols-3">
         {/* active jobs */}
         <Card className="glass rounded-2xl lg:col-span-2">
@@ -159,7 +226,7 @@ export function DashboardModule() {
           </CardHeader>
           <CardContent className="max-h-64 overflow-y-auto scrollbar-thin">
             {loading ? (
-              <div className="grid gap-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 rounded-xl bg-muted/40" />)}</div>
+              <div className="grid gap-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 rounded-xl bg-muted/40 shimmer" />)}</div>
             ) : activeJobs.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">{t("dash.noJobs")}</p>
             ) : (
@@ -238,7 +305,7 @@ export function DashboardModule() {
                 </p>
               </>
             ) : (
-              <Skeleton className="h-32 rounded-xl bg-muted/40" />
+              <Skeleton className="h-32 rounded-xl bg-muted/40 shimmer" />
             )}
           </CardContent>
         </Card>

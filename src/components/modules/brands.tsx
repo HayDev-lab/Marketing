@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useApp, pulseCore } from "@/lib/store";
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import {
   Building2, Globe, Plus, Sparkles, RefreshCw, Loader2, ExternalLink, Trash2,
-  Cpu, UserRound, ShieldAlert, Lightbulb, Target, CircleCheck, StickyNote, Mic2,
+  Cpu, UserRound, ShieldAlert, Lightbulb, Target, CircleCheck, StickyNote, Mic2, Layers,
 } from "lucide-react";
 
 // ---------- types (server API shapes) ----------
@@ -262,6 +262,48 @@ export function BrandsModule(_props: { onBrandsChanged?: () => void }) {
       await refreshAll();
     } catch (e) {
       toast.error(errMessage(e));
+    }
+  };
+
+  // duplicate detection: same normalized text within a brand (case/whitespace-insensitive)
+  // returns Map<factId, groupSize> — only facts that belong to a duplicated group
+  const dupeMap = useMemo(() => {
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+    const groups = new Map<string, FactDto[]>();
+    for (const f of detail?.facts ?? []) {
+      const k = norm(f.content);
+      if (!k) continue;
+      const arr = groups.get(k) ?? [];
+      arr.push(f);
+      groups.set(k, arr);
+    }
+    const dupes = new Map<string, number>();
+    for (const arr of groups.values()) {
+      if (arr.length > 1) {
+        // keep the newest fact, mark the older ones as duplicates
+        const sorted = [...arr].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+        sorted.slice(1).forEach((f) => dupes.set(f.id, arr.length));
+      }
+    }
+    return dupes;
+  }, [detail?.facts]);
+  const dupeIds = dupeMap;
+
+  const dedupFacts = async () => {
+    if (!detail || dupeMap.size === 0) {
+      toast.info(t("brands.dedupNone"));
+      return;
+    }
+    try {
+      const ids = [...dupeMap.keys()];
+      for (const id of ids) {
+        await api(`/api/brands/${detail.id}/facts?factId=${id}`, { method: "DELETE" });
+      }
+      toast.success(t("brands.dedupDone", { count: ids.length }));
+      await refreshAll();
+    } catch (e) {
+      toast.error(errMessage(e));
+      await refreshAll();
     }
   };
 
@@ -603,9 +645,20 @@ export function BrandsModule(_props: { onBrandsChanged?: () => void }) {
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
                   <Card className="glass rounded-2xl">
                     <CardHeader className="pb-2">
-                      <CardTitle className="flex items-center gap-2 text-base">
+                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                         <StickyNote className="h-4 w-4 text-[var(--neon-2)]" /> {t("brands.factsTitle")}
                         <Badge variant="secondary" className="text-[10px]">{detail.facts.length}</Badge>
+                        {dupeIds.size > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="ml-auto h-8 gap-1.5 border-[color-mix(in_oklab,var(--neon-3)_45%,transparent)] text-[11px] text-[var(--neon-3)] hover:bg-[color-mix(in_oklab,var(--neon-3)_12%,transparent)]"
+                            onClick={dedupFacts}
+                          >
+                            <Layers className="h-3.5 w-3.5" aria-hidden />
+                            {t("brands.dedup")}
+                          </Button>
+                        )}
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="grid gap-4">
@@ -656,18 +709,32 @@ export function BrandsModule(_props: { onBrandsChanged?: () => void }) {
                                 </p>
                                 <ul className="grid gap-2">
                                   {items.map((f) => (
-                                    <li key={f.id} className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
+                                    <li key={f.id} className={`rounded-xl border px-3 py-2.5 ${dupeMap.has(f.id) ? "border-[color-mix(in_oklab,var(--neon-3)_45%,transparent)] bg-[color-mix(in_oklab,var(--neon-3)_7%,transparent)]" : "border-border/60 bg-muted/20"}`}>
                                       <div className="flex items-start justify-between gap-2">
                                         <p className="text-sm leading-snug">{f.content}</p>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                                          onClick={() => deleteFact(f.id)}
-                                          aria-label={`${t("common.delete")}: ${f.content.slice(0, 40)}`}
-                                        >
-                                          <Trash2 className="h-3.5 w-3.5" />
-                                        </Button>
+                                        <div className="flex shrink-0 items-center gap-1">
+                                          {dupeMap.has(f.id) && (
+                                            <span
+                                              className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                              style={{
+                                                color: "var(--neon-3)",
+                                                background: "color-mix(in oklab, var(--neon-3) 14%, transparent)",
+                                              }}
+                                              title={t("brands.dupes")}
+                                            >
+                                              ×{dupeMap.get(f.id)}
+                                            </span>
+                                          )}
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                            onClick={() => deleteFact(f.id)}
+                                            aria-label={`${t("common.delete")}: ${f.content.slice(0, 40)}`}
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </Button>
+                                        </div>
                                       </div>
                                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                                         <span

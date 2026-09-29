@@ -24,8 +24,13 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   FileStack, Instagram, Music2, Facebook, Send, RefreshCw, Search, History,
   ImageIcon, Film, AudioLines, Trash2, Loader2, ShieldCheck, CircleAlert, CheckCircle2, Globe,
+  Package, Copy, FileDown, FileJson,
 } from "lucide-react";
 
 // ===== types =====
@@ -118,6 +123,54 @@ function errText(e: unknown, fallback: string, known: string[], tr: (k: string) 
   return known.includes(code) ? tr(`content.err.${code}`) : tr(fallback);
 }
 
+// ---------- content package export ----------
+function buildMarkdown(d: ContentDetail, brandName: string): string {
+  const assetUrl = d.asset ? `${window.location.origin}/api/assets/${d.asset.id}/raw` : null;
+  const lines: string[] = [
+    `# ${d.title}`,
+    "",
+    `- **Brand:** ${brandName || "—"}`,
+    `- **Platform:** ${d.platform}`,
+    `- **Type:** ${d.contentType}`,
+    `- **Language:** ${d.language}`,
+    `- **State:** ${d.approvalState}`,
+    `- **Version:** v${d.contentVersion}`,
+    `- **Updated:** ${new Date(d.updatedAt).toISOString()}`,
+    "",
+  ];
+  if (d.hook) lines.push("## Hook", "", d.hook, "");
+  if (d.caption) lines.push("## Caption", "", d.caption, "");
+  if (d.hashtags) lines.push("## Hashtags", "", d.hashtags, "");
+  if (d.script) lines.push("## Script", "", d.script, "");
+  if (d.videoProject?.scenes?.length) {
+    lines.push("## Video scenes", "");
+    d.videoProject.scenes
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .forEach((s, i) => lines.push(`${i + 1}. ${s.text ?? s.narration ?? ""}`));
+    lines.push("");
+  }
+  if (assetUrl) lines.push(`## Media`, "", `${d.asset?.filename ?? "asset"} (${d.asset?.mimeType ?? ""}) — ${assetUrl}`, "");
+  lines.push("---", "", `Exported from ՀայDev Marketing — ${new Date().toISOString()}`);
+  return lines.join("\n");
+}
+
+function downloadText(filename: string, text: string, mime: string) {
+  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function safeFileStem(s: string): string {
+  return (s || "content").toLowerCase().replace(/[^a-z0-9\u0561-\u0587\u0430-\u044f]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "content";
+}
+
 // ===== main module =====
 export function ContentModule(_props: { onBrandsChanged?: () => void }) {
   const { t } = useI18n();
@@ -164,6 +217,12 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
     for (const it of items) map[it.approvalState] = (map[it.approvalState] ?? 0) + 1;
     return map;
   }, [items]);
+
+  // brand display name for package export
+  const detailBrandName = useMemo(
+    () => brands.find((b) => b.id === detail?.brandId)?.name ?? "",
+    [brands, detail?.brandId]
+  );
 
   const filtered = useMemo(() => items.filter((it) => {
     if (stateFilter && it.approvalState !== stateFilter) return false;
@@ -567,9 +626,55 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
 
               <Separator />
 
-              <Button variant="destructive" className="min-h-11 w-full sm:w-auto sm:justify-self-end" onClick={() => setConfirmDelete(true)}>
-                <Trash2 className="h-4 w-4" aria-hidden /> {t("content.delete")}
-              </Button>
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                {/* content package export (markdown / json / clipboard) */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="min-h-11 gap-1.5">
+                      <Package className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> {t("content.export")}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">{detail.title.slice(0, 40)}{detail.title.length > 40 ? "…" : ""}</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        const md = buildMarkdown(detail, detailBrandName);
+                        try {
+                          await navigator.clipboard.writeText(md);
+                          toast.success(t("content.exportCopied"));
+                        } catch {
+                          downloadText(`${safeFileStem(detail.title)}.md`, md, "text/markdown");
+                          toast.success(t("content.exportDone"));
+                        }
+                      }}
+                    >
+                      <Copy className="mr-2 h-4 w-4" aria-hidden /> {t("content.exportCopy")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        downloadText(`${safeFileStem(detail.title)}.md`, buildMarkdown(detail, detailBrandName), "text/markdown");
+                        toast.success(t("content.exportDone"));
+                      }}
+                    >
+                      <FileDown className="mr-2 h-4 w-4" aria-hidden /> {t("content.exportMd")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const pkg = { ...detail, brand: detailBrandName, exportedAt: new Date().toISOString(), assetUrl: detail.asset ? `/api/assets/${detail.asset.id}/raw` : null };
+                        downloadText(`${safeFileStem(detail.title)}.json`, JSON.stringify(pkg, null, 2), "application/json");
+                        toast.success(t("content.exportDone"));
+                      }}
+                    >
+                      <FileJson className="mr-2 h-4 w-4" aria-hidden /> {t("content.exportJson")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Button variant="destructive" className="min-h-11 sm:w-auto" onClick={() => setConfirmDelete(true)}>
+                  <Trash2 className="h-4 w-4" aria-hidden /> {t("content.delete")}
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
