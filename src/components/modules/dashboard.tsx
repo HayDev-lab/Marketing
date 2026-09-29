@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Building2, Flame, CalendarRange, FileStack, ImageIcon, Clapperboard,
   AudioLines, Mic, UserSquare, Send, TrendingUp, Zap, Clock, Wallet,
-  ExternalLink, Activity,
+  ExternalLink, Activity, Globe, ShieldCheck,
 } from "lucide-react";
 
 interface Job {
@@ -52,10 +52,20 @@ interface Costs {
 interface DashData {
   jobs: Job[];
   trends: Trend[];
+  allTrends: Trend[];
   scheduled: Scheduled[];
   costs: Costs;
   contentCount: number;
   brandCount: number;
+}
+// aggregated external source backing the user's trend signals (durable — unlike the transient search panel in Trends)
+interface SourceAgg {
+  host: string;
+  url: string;
+  name: string;
+  signals: number;
+  verified: number;
+  sampleTitle: string;
 }
 
 const QUICK = [
@@ -123,7 +133,7 @@ export function DashboardModule() {
         const d = (order[a.status] ?? 4) - (order[b.status] ?? 4);
         return d !== 0 ? d : (b.confidence ?? 0) - (a.confidence ?? 0);
       });
-      setData({ jobs, trends: ranked.slice(0, 5), scheduled, costs, contentCount: content.length, brandCount: brandsList.length });
+      setData({ jobs, trends: ranked.slice(0, 5), allTrends: ranked, scheduled, costs, contentCount: content.length, brandCount: brandsList.length });
     } catch {
       // dashboard stays usable; empty states show
     } finally {
@@ -157,6 +167,35 @@ export function DashboardModule() {
     });
   }, [data?.scheduled, locale]);
   const weekHasPosts = weekDays.some((d) => d.posts.length > 0);
+
+  // aggregate the external sources behind ALL trend signals (not just top-5): group by host, count support
+  const sources = useMemo<SourceAgg[]>(() => {
+    const map = new Map<string, SourceAgg>();
+    for (const tr of data?.allTrends ?? []) {
+      const host = hostOf(tr.sourceUrl);
+      if (!host) continue; // hypotheses have no live source — honest widget only lists verifiable ones
+      const key = host.replace(/^www\./, "");
+      const prev = map.get(key);
+      if (prev) {
+        prev.signals += 1;
+        if (tr.status === "VERIFIED_TREND") prev.verified += 1;
+      } else {
+        map.set(key, {
+          host: key,
+          url: tr.sourceUrl ?? "#",
+          name: tr.sourceName ?? key,
+          signals: 1,
+          verified: tr.status === "VERIFIED_TREND" ? 1 : 0,
+          sampleTitle: tr.title,
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => b.verified - a.verified || b.signals - a.signals).slice(0, 6);
+  }, [data?.allTrends]);
+  const signalsWithSource = useMemo(
+    () => (data?.allTrends ?? []).filter((tr) => !!hostOf(tr.sourceUrl)).length,
+    [data?.allTrends]
+  );
 
   // time-aware greeting (client-side — safe because this module renders after auth only)
   const greeting = useMemo(() => {
@@ -270,7 +309,7 @@ export function DashboardModule() {
             ) : activeJobs.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">{t("dash.noJobs")}</p>
             ) : (
-              <ul className="grid gap-2">
+              <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
                 {activeJobs.map((j) => (
                   <li key={j.id} className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
                     <div className="min-w-0">
@@ -361,7 +400,7 @@ export function DashboardModule() {
             {!data || data.trends.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">{t("dash.noTrends")}</p>
             ) : (
-              <ul className="grid gap-2">
+              <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
                 {data.trends.map((tr) => {
                   const a = trendAccent(tr.status);
                   const ev = tr.evidence?.[0];
@@ -416,7 +455,7 @@ export function DashboardModule() {
             {!data || data.scheduled.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">{t("dash.noPosts")}</p>
             ) : (
-              <ul className="grid gap-2">
+              <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
                 {data.scheduled.map((p) => (
                   <li key={p.id} className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
                     <div className="min-w-0">
@@ -431,6 +470,61 @@ export function DashboardModule() {
           </CardContent>
         </Card>
       </div>
+
+      {/* signal sources — durable aggregation of the external evidence behind all trend signals */}
+      <section aria-label={t("dash.sources")}>
+        <h2 className="heading-accent mb-3 text-sm font-medium tracking-wide text-muted-foreground">
+          {t("dash.sources")} · {signalsWithSource}/{data?.allTrends.length ?? 0}
+        </h2>
+        <Card className="glass rounded-2xl">
+          <CardContent className="p-4">
+            {!data ? (
+              <div className="flex flex-wrap gap-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 w-44 rounded-xl bg-muted/40 shimmer" />)}</div>
+            ) : sources.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-4">
+                <Globe className="h-6 w-6 text-muted-foreground/50" aria-hidden />
+                <p className="text-center text-sm text-muted-foreground">{t("dash.sourcesEmpty")}</p>
+                <button onClick={() => setView("trends")} className="focus-glow rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--neon)] transition hover:bg-[var(--neon)]/10">
+                  {t("dash.sourcesCta")}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2.5">
+                  {sources.map((s, i) => (
+                    <motion.a
+                      key={s.host}
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`${s.name} — ${s.sampleTitle}`}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                      className="source-card group flex min-w-40 flex-1 flex-col gap-1.5 rounded-xl p-3 sm:min-w-48"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="rank-chip">{String(i + 1).padStart(2, "0")}</span>
+                        <span className="truncate text-xs font-semibold">{s.host}</span>
+                        <ExternalLink className="ml-auto h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition group-hover:opacity-100" aria-hidden />
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <span>{t("dash.sourceSignals", { n: s.signals })}</span>
+                        {s.verified > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[var(--neon-2)]" title={t("trends.status.VERIFIED_TREND")}>
+                            <ShieldCheck className="h-3 w-3" aria-hidden /> {s.verified}
+                          </span>
+                        )}
+                      </div>
+                    </motion.a>
+                  ))}
+                </div>
+                <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">{t("dash.sourcesNote")}</p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </section>
     </div>
   );
 }

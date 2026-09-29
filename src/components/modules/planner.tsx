@@ -363,7 +363,9 @@ export function PlannerModule() {
   // plan items that already have a draft (persisted via meta.itemIndex, falls back to session marks)
   const coveredIndexes = useCallback((cp: ContentPlanDto): Set<number> => {
     const covered = new Set<number>();
-    for (const ci of cp.contentItems ?? []) {
+    // Array.isArray guard: a non-null non-iterable contentItems (bad merge / shape drift) must not crash the whole module
+    const items = Array.isArray(cp.contentItems) ? cp.contentItems : [];
+    for (const ci of items) {
       const meta = parseJson<{ itemIndex?: unknown }>(ci.metaJson, {});
       if (typeof meta.itemIndex === "number") covered.add(meta.itemIndex);
     }

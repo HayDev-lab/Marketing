@@ -16,6 +16,7 @@ import {
 import {
   TrendingUp, Eye, Heart, MessageSquare, Share2, Bookmark, MousePointerClick,
   PenLine, Sparkles, Database, BrainCircuit, Loader2, RefreshCw, BarChart3,
+  Workflow, Layers, CalendarCheck2,
 } from "lucide-react";
 import { PlatformIcon } from "@/components/modules/content";
 
@@ -28,6 +29,21 @@ interface Snapshot {
 }
 
 interface ContentLite { id: string; title: string; platform: string }
+
+// pipeline overview — every number comes from real records (see /api/analytics/overview)
+interface Overview {
+  totalItems: number;
+  funnel: { state: string; count: number }[];
+  totalPosts: number;
+  postStatuses: { key: string; count: number }[];
+  platforms: { key: string; count: number }[];
+  languages: { key: string; count: number }[];
+  metrics: { snapshots: number; postsTracked: number; views: number; engagement: number; clicks: number };
+}
+const EMPTY_OVERVIEW: Overview = {
+  totalItems: 0, funnel: [], totalPosts: 0, postStatuses: [], platforms: [], languages: [],
+  metrics: { snapshots: 0, postsTracked: 0, views: 0, engagement: 0, clicks: 0 },
+};
 
 const METRIC_FIELDS = ["views", "likes", "comments", "shares", "saves", "clicks"] as const;
 type MetricField = (typeof METRIC_FIELDS)[number];
@@ -47,28 +63,63 @@ function metricColor(field: MetricField): string {
   }
 }
 
+// honest state → funnel color (matches trend/status palette: approved=published family = neon-2, scheduled = neon)
+function funnelAccent(state: string): string {
+  switch (state) {
+    case "APPROVED":
+    case "PUBLISHED":
+      return "var(--neon-2)";
+    case "SCHEDULED":
+      return "var(--neon)";
+    case "GENERATING":
+    case "READY_FOR_REVIEW":
+      return "var(--neon-3)";
+    case "CHANGES_REQUESTED":
+      return "#f59e0b";
+    case "FAILED":
+      return "#ef4444";
+    default:
+      return "color-mix(in oklab, currentColor 35%, transparent)";
+  }
+}
+
+// scheduled-post status → localized label (reuses existing keys; raw key as honest fallback)
+function postStatusLabel(t: (k: string) => string, key: string): string {
+  switch (key) {
+    case "SCHEDULED": return t("content.state.SCHEDULED");
+    case "READY": return t("content.state.READY_FOR_REVIEW");
+    case "ACTION_REQUIRED": return t("publishing.status.ACTION_REQUIRED");
+    case "CANCELLED": return t("job.status.CANCELLED");
+    default: return key;
+  }
+}
+
 // ===== main module =====
 export function AnalyticsModule(_props: { onBrandsChanged?: () => void }) {
   const { t } = useI18n();
 
   const [snaps, setSnaps] = useState<Snapshot[] | null>(null);
   const [content, setContent] = useState<ContentLite[] | null>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);
   const [entry, setEntry] = useState<Record<MetricField, string>>({ views: "", likes: "", comments: "", shares: "", saves: "", clicks: "" });
   const [entryId, setEntryId] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [s, c] = await Promise.all([
+      const [s, c, ov] = await Promise.all([
         api<Snapshot[]>("/api/analytics"),
         api<ContentLite[]>("/api/content"),
+        api<Overview>("/api/analytics/overview"),
       ]);
       setSnaps(s);
       setContent(c);
+      setOverview(ov);
       if (c.length && !entryId) setEntryId(c[0].id);
     } catch {
       setSnaps([]);
       setContent([]);
+      setOverview(EMPTY_OVERVIEW); // honest zeros — the module stays usable
     }
   }, [entryId]);
 
@@ -134,6 +185,133 @@ export function AnalyticsModule(_props: { onBrandsChanged?: () => void }) {
           </Button>
         </div>
       </motion.section>
+
+      {/* pipeline overview — real counts straight from the database */}
+      <section aria-label={t("analytics.pipeline")} className="grid gap-5 lg:grid-cols-2">
+        {/* funnel */}
+        <Card className="glass rounded-2xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Workflow className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("analytics.pipeline")}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">{t("analytics.pipelineDesc")}</p>
+          </CardHeader>
+          <CardContent>
+            {!overview ? (
+              <div className="grid gap-2.5">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 rounded-lg bg-muted/40 shimmer" />)}</div>
+            ) : overview.totalItems === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">{t("analytics.emptyPipeline")}</p>
+            ) : (
+              <ul className="grid gap-2.5">
+                {overview.funnel.map((f, i) => {
+                  const max = Math.max(1, ...overview.funnel.map((x) => x.count));
+                  return (
+                    <li key={f.state}>
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate text-muted-foreground">{t(`content.state.${f.state}` as const)}</span>
+                        <span className={`font-semibold tabular-nums ${f.count > 0 ? "text-foreground" : "text-muted-foreground/50"}`}>{f.count}</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/40">
+                        <motion.div
+                          className="h-full rounded-full"
+                          style={{ background: funnelAccent(f.state) }}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${f.count > 0 ? Math.max(4, (f.count / max) * 100) : 0}%` }}
+                          transition={{ delay: i * 0.04, duration: 0.45, ease: "easeOut" }}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* mix + publishing honesty */}
+        <div className="grid content-start gap-5">
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: t("analytics.snapshots"), value: overview?.metrics.snapshots, icon: Database, color: "var(--neon-3)" },
+              { label: t("analytics.postsTracked"), value: overview?.metrics.postsTracked, icon: CalendarCheck2, color: "var(--neon)" },
+              { label: t("analytics.m.engagement"), value: overview?.metrics.engagement, icon: Heart, color: "var(--neon-2)" },
+            ].map(({ label, value, icon: Icon, color }, i) => (
+              <motion.div key={label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="glass glass-hover rounded-2xl p-3.5">
+                <span className="rounded-lg p-1.5" style={{ background: `color-mix(in oklab, ${color} 15%, transparent)` }}>
+                  <Icon className="h-3.5 w-3.5" style={{ color }} aria-hidden />
+                </span>
+                {value === undefined ? (
+                  <Skeleton className="mt-2 h-6 w-14 rounded-md bg-muted/40" />
+                ) : (
+                  <p className="mt-2 text-base font-semibold tabular-nums" style={{ color }}>{value.toLocaleString()}</p>
+                )}
+                <p className="text-[11px] leading-tight text-muted-foreground">{label}</p>
+              </motion.div>
+            ))}
+          </div>
+
+          <Card className="glass rounded-2xl">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Layers className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> {t("analytics.mix")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 p-4 pt-0">
+              {!overview ? (
+                <Skeleton className="h-16 rounded-xl bg-muted/40 shimmer" />
+              ) : (
+                <>
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("analytics.platforms")}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {overview.platforms.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">{t("analytics.emptyPipeline")}</span>
+                      ) : (
+                        overview.platforms.map((p) => (
+                          <Badge key={p.key} variant="outline" className="gap-1 bg-muted/20 text-[11px]">
+                            <PlatformIcon platform={p.key} /> {p.key}
+                            <span className="tabular-nums text-muted-foreground">×{p.count}</span>
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("analytics.languages")}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {overview.languages.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">{t("analytics.emptyPipeline")}</span>
+                      ) : (
+                        overview.languages.map((l) => (
+                          <Badge key={l.key} variant="outline" className="bg-muted/20 text-[11px]">
+                            {t(`content.lang.${l.key}` as const)}
+                            <span className="tabular-nums text-muted-foreground">×{l.count}</span>
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("analytics.postStatus")}</p>
+                    {overview.postStatuses.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">{t("analytics.noPublishing")}</p>
+                    ) : (
+                      <ul className="grid gap-1">
+                        {overview.postStatuses.map((p) => (
+                          <li key={p.key} className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-xs">
+                            <span className="truncate text-muted-foreground">{postStatusLabel(t, p.key)}</span>
+                            <span className="font-semibold tabular-nums">{p.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </section>
 
       {/* aggregate metric cards */}
       <section aria-label={t("analytics.metrics")}>
