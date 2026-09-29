@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Building2, Flame, CalendarRange, FileStack, ImageIcon, Clapperboard,
   AudioLines, Mic, UserSquare, Send, TrendingUp, Zap, Clock, Wallet,
+  ExternalLink, Activity,
 } from "lucide-react";
 
 interface Job {
@@ -21,12 +22,18 @@ interface Job {
   error?: string | null;
   createdAt: string;
 }
+interface EvidenceQuote { quote: string; source: string; observedAt: string }
 interface Trend {
   id: string;
   title: string;
   platform?: string | null;
   status: string;
   brandFitScore?: number | null;
+  confidence?: number | null;
+  sourceName?: string | null;
+  sourceUrl?: string | null;
+  metricsObserved?: string | null;
+  evidence?: EvidenceQuote[] | null;
 }
 interface Scheduled {
   id: string;
@@ -72,6 +79,25 @@ function cnSpark(cost: number): string {
   return "min-h-[2px] flex-1 rounded-t-sm bg-gradient-to-t from-[var(--neon-3)] to-[var(--neon)] shadow-[0_0_8px_var(--neon)]";
 }
 
+// honest trend status → badge style (verified = confirmed by live source, hypothesis = LLM guess)
+function trendAccent(status: string): { className?: string; style?: React.CSSProperties } {
+  switch (status) {
+    case "VERIFIED_TREND":
+      return { className: "", style: { background: "color-mix(in oklab, var(--neon-2) 16%, transparent)", color: "var(--neon-2)", borderColor: "color-mix(in oklab, var(--neon-2) 40%, transparent)" } };
+    case "EMERGING_SIGNAL":
+      return { className: "", style: { background: "color-mix(in oklab, var(--neon) 14%, transparent)", color: "var(--neon)", borderColor: "color-mix(in oklab, var(--neon) 40%, transparent)" } };
+    case "HYPOTHESIS":
+      return { className: "bg-amber-500/10 text-amber-500 border-amber-500/30" };
+    default:
+      return { className: "bg-muted/40 text-muted-foreground border-border" };
+  }
+}
+
+function hostOf(url: string | null | undefined): string {
+  if (!url) return "";
+  try { return new URL(url).host; } catch { return ""; }
+}
+
 export function DashboardModule() {
   const { t, locale } = useI18n();
   const setView = useApp((s) => s.setView);
@@ -85,13 +111,19 @@ export function DashboardModule() {
     try {
       const [jobs, trends, scheduled, costs, content, brandsList] = await Promise.all([
         api<Job[]>("/api/jobs?limit=12"),
-        api<Trend[]>(`/api/trends${activeBrandId ? `?brandId=${activeBrandId}` : ""}`),
+        api<Trend[]>("/api/trends"), // user-level signals (brand-agnostic): ranking surfaces the most relevant
         api<Scheduled[]>("/api/schedule?upcoming=1"),
         api<Costs>("/api/costs"),
         api<unknown[]>(`/api/content${activeBrandId ? `?brandId=${activeBrandId}` : ""}`),
         api<{ id: string }[]>("/api/brands"),
       ]);
-      setData({ jobs, trends: trends.slice(0, 5), scheduled, costs, contentCount: content.length, brandCount: brandsList.length });
+      // surface the most valuable trends first: live-verified > emerging > popular > hypothesis
+      const order: Record<string, number> = { VERIFIED_TREND: 0, EMERGING_SIGNAL: 1, POPULAR_TOPIC: 2, HYPOTHESIS: 3 };
+      const ranked = [...trends].sort((a, b) => {
+        const d = (order[a.status] ?? 4) - (order[b.status] ?? 4);
+        return d !== 0 ? d : (b.confidence ?? 0) - (a.confidence ?? 0);
+      });
+      setData({ jobs, trends: ranked.slice(0, 5), scheduled, costs, contentCount: content.length, brandCount: brandsList.length });
     } catch {
       // dashboard stays usable; empty states show
     } finally {
@@ -126,6 +158,14 @@ export function DashboardModule() {
   }, [data?.scheduled, locale]);
   const weekHasPosts = weekDays.some((d) => d.posts.length > 0);
 
+  // time-aware greeting (client-side — safe because this module renders after auth only)
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return t("dash.greet.morning");
+    if (h < 18) return t("dash.greet.afternoon");
+    return t("dash.greet.evening");
+  }, [t]);
+
   return (
     <div className="grid gap-5">
       {/* welcome */}
@@ -133,7 +173,7 @@ export function DashboardModule() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold sm:text-2xl">
-              {t("dash.welcome")}, <span className="neon-text">{user?.name ?? user?.email}</span>
+              {greeting}, <span className="neon-text">{user?.name ?? user?.email}</span>
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {data && data.brandCount === 0 ? t("dash.noBrand") : `${data?.brandCount ?? 0} brands · ${data?.contentCount ?? 0} content items`}
@@ -322,17 +362,46 @@ export function DashboardModule() {
               <p className="py-6 text-center text-sm text-muted-foreground">{t("dash.noTrends")}</p>
             ) : (
               <ul className="grid gap-2">
-                {data.trends.map((tr) => (
-                  <li key={tr.id} className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="line-clamp-1 text-sm font-medium">{tr.title}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">{tr.status}</Badge>
-                    </div>
-                    {tr.brandFitScore != null && (
-                      <p className="mt-1 text-[11px] text-muted-foreground">Brand fit: {(tr.brandFitScore * 100).toFixed(0)}% · {tr.platform ?? "web"}</p>
-                    )}
-                  </li>
-                ))}
+                {data.trends.map((tr) => {
+                  const a = trendAccent(tr.status);
+                  const ev = tr.evidence?.[0];
+                  const host = hostOf(tr.sourceUrl);
+                  return (
+                    <li key={tr.id} className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5 transition hover:border-[var(--neon)]/30">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="line-clamp-1 text-sm font-medium">{tr.title}</p>
+                        <Badge variant="outline" className={`shrink-0 text-[10px] ${a.className ?? ""}`} style={a.style}>
+                          {t(`trends.status.${tr.status}` as const)}
+                        </Badge>
+                      </div>
+                      {tr.brandFitScore != null && (
+                        <p className="mt-1 text-[11px] text-muted-foreground">Brand fit: {(tr.brandFitScore * 100).toFixed(0)}% · {tr.platform ?? "web"}</p>
+                      )}
+                      {ev && (
+                        <p className="quote-accent mt-2 line-clamp-2 text-[11px] italic text-muted-foreground" title={ev.source}>
+                          “{ev.quote}”
+                        </p>
+                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                        {tr.metricsObserved && (
+                          <span className="inline-flex items-center gap-1 text-[var(--neon-3)]" title={tr.metricsObserved}>
+                            <Activity className="h-3 w-3" aria-hidden /> {tr.metricsObserved.slice(0, 60)}
+                          </span>
+                        )}
+                        {host && (
+                          <a
+                            href={tr.sourceUrl ?? "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ml-auto inline-flex items-center gap-1 opacity-70 transition hover:opacity-100 hover:text-[var(--neon)]"
+                          >
+                            <ExternalLink className="h-3 w-3" aria-hidden /> {host}
+                          </a>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>

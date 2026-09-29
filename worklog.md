@@ -222,3 +222,28 @@ Stage Summary:
 - 1 надёжностный фикс: webSearch retry/backoff (429 upstream)
 - Риски: web_search провайдер (serper-зеркало) лимитирован большую часть дня — фолбэк покрывает UX, но live-данные недоступны до восстановления квоты; aiWrite может писать не на запрошенном языке (просили hy — получил en: провайдерное качество промпта)
 - Кандидаты next: усилить языковую директиву aiWrite, экспорт кампании ZIP, A/B варианты постов, виджет источников на дашборде, периодический TREND_SEARCH в autopilot
+
+---
+Task ID: 10
+Agent: main (cron webDevReview #5)
+Task: QA-проход #5 + фичи (A/B варианты постов, экспорт кампании, evidence-карточки трендов на дашборде) + фикс языковой директивы aiWrite + стайлинг
+
+Work Log:
+- Инфраструктура: dev-сервер жив (HTTP 200), qa4-сессия активна; быстрый QA всех 13 views — 0 консольных ошибок, все переходы работают. Приоритет отдан фичам (статус стабильный, багов не найдено).
+- НОВАЯ ФИЧА (A/B варианты постов): POST /api/content/[id]/variants — генерирует 2 варианта копирайта с РАЗНЫМИ креативными углами (A = эмоциональный/любопытство-хук, B = информативный/польза-хук), grounded в бренд-профиль, запрещённые клеймы соблюдаются; варианты НЕ персистятся (ephemeral) — применяются через существующий PATCH (материальное редактирование → version bump + честная инвалидация APPROVED). 502 GENERATION_FAILED с canRetry при провале провайдера. audit action=content.variants
+- UI A/B (content detail dialog): секция между полями и историей — кнопка Generate/Regenerate (Sparkles/Loader2), 2 карточки со stagger-анимацией: rank-chip A/B, angle-badge, hook в quote-accent, caption line-clamp-3, hashtags neon-3, кнопка «Կիրառել» → заполняет форму (hook/caption/hashtags/script) + тост «сохраните изменения»; применённая карточка подсвечена neon-border; skeleton-загрузка; кнопка disabled в GENERATING/PUBLISHED
+- НОВАЯ ФИЧА (экспорт кампании): кнопка «Արտահանել արշավը» в шапке Content — markdown-дайджест всех items под ТЕКУЩИМИ фильтрами (brand/state/search): заголовок с датой/кол-вом, на каждый item — бренд/платформа/тип/язык/стейт/версия + hook/caption/hashtags/script; скачивание campaign-{state}-{n}.md; честный тост при пустом фильтре
+- ФИКС (языковая директива aiWrite): в POST /api/content и /variants — системный промпт теперь «Write EXCLUSIVELY in Armenian (Հայերեն)… ALL output fields MUST be 100% in {language}. Do NOT use any other language anywhere» с маппингом hy/ru/en → полные названия; РЕЗУЛЬТАТ: варианты реально пришли на армянском (раньше просили hy — получали en)
+- ФИКС (дашборд прятал проверенные тренды): GET /api/trends?brandId=X исключал тренды с brandId=null (4 VERIFIED с evidence лежали вне бренда); дашборд теперь берёт тренды юзера без бренд-фильтра (тренды = юзер-левел сигналы) + сортировка по ценности: VERIFIED_TREND > EMERGING_SIGNAL > POPULAR_TOPIC > HYPOTHESIS, потом confidence
+- UI дашборда (Trend radar upgrade): карточки трендов с честными статусами (trends.status.* локали, emerald verified / neon emerging / amber hypothesis), evidence-цитата в quote-accent (только у живых трендов), наблюдаемые метрики (Activity, neon-3), внешняя ссылка на источник-хост (ExternalLink, hover); time-aware приветствие (Բարի լույս/օր/երեկո по часам клиента)
+- Верификация браузером (qa4): greeting «Բարի երեկո, QA4 Reviewer» ✓; дашборд показывает 4 verified-тренда сверху с цитатами/метриками/хостами (www.brik.ly и др.) ✓; A/B: generate → 2 армянских хука с разными углами («Ինչո՞ւ ենք մենք դեռ սիրում հին ձևով սուրճ խմել։» vs «Սուրճի համը ավելի մաքուր դարձնելու գաղտնիքը…») → Apply A → форма заполнена + тост → Save → «Փոփոխությունները պահպանված են», v1→v2 ✓; экспорт кампании → тост «({n} միավոր)» + скачивание .md ✓; RU-локаль: «A/B варианты»/«Применить» ✓; mobile 390px — без горизонтального overflow ✓; консоль 0 ошибок
+- i18n: publishing.ts +10 ключей (content.variants* ×7, content.exportCampaign* ×3) ×3 локали — PARITY 132×3; core.ts +3 (dash.greet.morning/afternoon/evening) ×3 — PARITY 136×3
+- bun run lint 0 ошибок; bunx tsc --noEmit 0 ошибок (вне pre-existing examples/skills); dev.log зелёный
+- Скриншоты: tool-results/qa5-dashboard-greeting.png, qa5-dashboard-trends-bottom.png, qa5-ab-variants.png, qa5-ab-variants-cards.png, qa5-mobile-content.png
+
+Stage Summary:
+- 3 фичи верифицированы живьём: A/B варианты постов (реальный AI-вызов, честный ephemeral-флоу через PATCH), экспорт кампании (markdown под фильтрами), trend-evidence радар на дашборде с ранжированием по достоверности
+- 2 фикса: языковая директива aiWrite (промпт вынуждает 100% язык вывода — подтверждено на армянском), дашборд больше не прячет проверенные тренды без бренда
+- Стайлинг: rank-chip/quote-accent переиспользованы, время-зависимое приветствие, честная цветовая маркировка статусов трендов
+- Риски: variants LLM-вызов ~20-40с (без jobs-очереди — синхронный запрос, UI показывает skeleton; при зависании провайдера фетч висит до таймаута); экспорт кампании не включает медиа-файлы (только текст + assetUrl у одиночного пакета)
+- Кандидаты next: batch-генерация сценариев, A/B через jobs-очередь с историей вариантов, ZIP-экспорт с медиа, виджет источников на дашборде (полный, как в Trends), периодический TREND_SEARCH в autopilot, onboarding-тур на новые фичи

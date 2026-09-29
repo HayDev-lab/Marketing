@@ -36,8 +36,12 @@ export async function POST(req: NextRequest) {
     let script = body.script ?? null;
     let hashtags = body.hashtags ?? null;
 
+    const LANG_NAME: Record<string, string> = { hy: "Armenian (Հայերեն)", ru: "Russian (Русский)", en: "English" };
+
     if (body.aiWrite) {
-      const system = `You are a platform-native copywriter for ${platform}. Write in ${language}.
+      const langName = LANG_NAME[language] ?? "Armenian (Հայերեն)";
+      const system = `You are a platform-native copywriter for ${platform}. Write EXCLUSIVELY in ${langName}.
+ALL output fields (hook, caption, script, hashtags) MUST be 100% in ${langName}. Do NOT use any other language anywhere.
 Ground claims ONLY in the brand data. NEVER invent prices, discounts, certificates, clients, reviews, awards, guarantees, medical results, statistics.
 Respect platform norms: caption length, hook in first 2 seconds.`;
       const prompt = `BRAND: ${brand.name}

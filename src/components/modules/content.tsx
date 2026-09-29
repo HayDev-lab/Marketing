@@ -30,7 +30,7 @@ import {
 import {
   FileStack, Instagram, Music2, Facebook, Send, RefreshCw, Search, History,
   ImageIcon, Film, AudioLines, Trash2, Loader2, ShieldCheck, CircleAlert, CheckCircle2, Globe,
-  Package, Copy, FileDown, FileJson,
+  Package, Copy, FileDown, FileJson, FlaskConical, Sparkles, Check,
 } from "lucide-react";
 
 // ===== types =====
@@ -70,6 +70,8 @@ interface ApprovalEvent {
 }
 
 interface BrandLite { id: string; name: string }
+
+interface VariantCopy { id: string; angle: string; hook: string; caption: string; script: string; hashtags: string[] }
 
 const STATES: ApprovalState[] = ["DRAFT", "GENERATING", "READY_FOR_REVIEW", "CHANGES_REQUESTED", "APPROVED", "SCHEDULED", "PUBLISHED", "FAILED"];
 const PLATFORMS = ["instagram", "tiktok", "facebook", "telegram"];
@@ -194,6 +196,11 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
   const [invalidation, setInvalidation] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // A/B variants (ephemeral — applied via form, persisted only on explicit save)
+  const [variants, setVariants] = useState<VariantCopy[] | null>(null);
+  const [variantsLoading, setVariantsLoading] = useState(false);
+  const [appliedVariant, setAppliedVariant] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try {
       const [c, b] = await Promise.all([
@@ -235,6 +242,8 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
     setOpenId(id);
     setDetailLoading(true);
     setInvalidation(null);
+    setVariants(null);
+    setAppliedVariant(null);
     try {
       const [d, h] = await Promise.all([
         api<ContentDetail>(`/api/content/${id}`),
@@ -332,6 +341,69 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
 
   const editable = detail && detail.approvalState !== "GENERATING" && detail.approvalState !== "PUBLISHED";
 
+  const generateVariants = async () => {
+    if (!detail) return;
+    setVariantsLoading(true);
+    try {
+      const res = await api<{ variants: VariantCopy[] }>(`/api/content/${detail.id}/variants`, { method: "POST" });
+      setVariants(res.variants);
+      setAppliedVariant(null);
+    } catch (e) {
+      toast.error(t("content.variantsFailed"), { description: (e as Error).message });
+    } finally {
+      setVariantsLoading(false);
+    }
+  };
+
+  const applyVariant = (v: VariantCopy) => {
+    setForm((f) => ({
+      ...f,
+      hook: v.hook,
+      caption: v.caption,
+      hashtags: v.hashtags.join(" "),
+      ...(v.script ? { script: v.script } : {}),
+    }));
+    setAppliedVariant(v.id);
+    toast.success(t("content.variantsApplied", { v: v.id }));
+  };
+
+  // bulk campaign export: markdown digest of everything matching the current filters
+  const exportCampaign = () => {
+    if (filtered.length === 0) {
+      toast.info(t("content.exportCampaignEmpty"));
+      return;
+    }
+    const brandNameOf = (id: string) => brands.find((b) => b.id === id)?.name ?? "—";
+    const lines: string[] = [
+      `# HayDev — ${t("content.exportCampaign")}`,
+      "",
+      `- **Date:** ${new Date().toISOString()}`,
+      `- **Items:** ${filtered.length}`,
+      `- **Brand:** ${brandFilter === "all" ? "all" : brandNameOf(brandFilter)}`,
+      `- **State:** ${stateFilter ?? "all"}`,
+      "",
+    ];
+    filtered.forEach((it, i) => {
+      lines.push(
+        "---",
+        "",
+        `## ${i + 1}. ${it.title}`,
+        "",
+        `- **Brand:** ${brandNameOf(it.brandId)}`,
+        `- **Platform:** ${it.platform} · **Type:** ${it.contentType} · **Lang:** ${it.language}`,
+        `- **State:** ${it.approvalState} · v${it.contentVersion} · ${new Date(it.updatedAt).toISOString()}`,
+        "",
+      );
+      if (it.hook) lines.push(`**Hook:** ${it.hook}`, "");
+      if (it.caption) lines.push("**Caption:**", "", it.caption, "");
+      if (it.hashtags) lines.push(`**Hashtags:** ${it.hashtags}`, "");
+      if (it.script) lines.push("**Script:**", "", it.script, "");
+    });
+    lines.push("---", "", `Exported from ՀայDev Marketing — ${new Date().toISOString()}`);
+    downloadText(`campaign-${stateFilter ?? "all"}-${filtered.length}.md`, lines.join("\n"), "text/markdown");
+    toast.success(t("content.exportCampaignDone", { n: filtered.length }));
+  };
+
   return (
     <div className="grid gap-5">
       {/* header */}
@@ -344,6 +416,16 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
             <p className="mt-1 text-sm text-muted-foreground">{t("content.subtitle")}</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 gap-1.5"
+              onClick={exportCampaign}
+              disabled={filtered.length === 0}
+              aria-label={t("content.exportCampaign")}
+            >
+              <Package className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> {t("content.exportCampaign")}
+            </Button>
             <Button variant="outline" size="sm" onClick={load} aria-label={t("content.refresh")} className="min-h-11">
               <RefreshCw className="h-4 w-4" aria-hidden />
             </Button>
@@ -610,7 +692,64 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
                 )}
               </section>
 
-              {/* approval history */}
+              {/* A/B variants (AI, ephemeral) */}
+              <section aria-label={t("content.variantsTitle")}>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <FlaskConical className="h-3.5 w-3.5 text-[var(--neon-3)]" aria-hidden /> {t("content.variantsTitle")}
+                  </h3>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="min-h-9 gap-1.5"
+                    disabled={variantsLoading || !editable}
+                    onClick={generateVariants}
+                  >
+                    {variantsLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4 text-[var(--neon)]" aria-hidden />}
+                    {variants ? t("content.variantsRegenerate") : t("content.variantsGenerate")}
+                  </Button>
+                </div>
+                <p className="mb-3 text-xs text-muted-foreground">{t("content.variantsHint")}</p>
+                {variantsLoading ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-44 rounded-2xl bg-muted/40 shimmer" />)}
+                  </div>
+                ) : variants ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {variants.map((v, i) => (
+                      <motion.div
+                        key={v.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: i * 0.08 }}
+                        className={`relative overflow-hidden rounded-2xl border p-4 ${appliedVariant === v.id ? "border-[var(--neon)]/60 bg-[var(--neon)]/5 neon-border" : "border-border/60 bg-muted/20"}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="rank-chip" aria-hidden>{v.id}</span>
+                          <Badge variant="outline" className="max-w-[75%] truncate text-[10px]" title={v.angle}>{v.angle || `Variant ${v.id}`}</Badge>
+                        </div>
+                        <p className="quote-accent mt-3 line-clamp-2 text-sm italic">{v.hook || "—"}</p>
+                        <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">{v.caption || "—"}</p>
+                        {v.hashtags.length > 0 && (
+                          <p className="mt-2 truncate text-[11px] text-[var(--neon-3)]">
+                            {v.hashtags.slice(0, 8).map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")}
+                          </p>
+                        )}
+                        <Button
+                          size="sm"
+                          variant={appliedVariant === v.id ? "secondary" : "outline"}
+                          className="mt-3 min-h-9 w-full"
+                          disabled={!editable}
+                          onClick={() => applyVariant(v)}
+                        >
+                          <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden /> {t("content.variantsApply")}
+                        </Button>
+                      </motion.div>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+
               <section aria-label={t("content.history")}>
                 <h3 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   <History className="h-3.5 w-3.5" aria-hidden /> {t("content.history")}
