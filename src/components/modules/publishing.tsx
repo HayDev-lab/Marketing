@@ -19,7 +19,7 @@ import {
 import {
   Instagram, Music2, Facebook, Send, Link2, Unlink, CalendarClock, TriangleAlert,
   Download, RefreshCw, Loader2, CircleAlert, ClipboardCheck, Hand,
-  CalendarRange, ChevronLeft, ChevronRight,
+  CalendarRange, ChevronLeft, ChevronRight, GripVertical,
 } from "lucide-react";
 import { PlatformIcon } from "@/components/modules/content";
 
@@ -100,6 +100,8 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [weekPostId, setWeekPostId] = useState<string | null>(null);
   const [weekReschedValue, setWeekReschedValue] = useState("");
+  const [dragPostId, setDragPostId] = useState<string | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
 
   const loadConnections = useCallback(async () => {
     try {
@@ -279,6 +281,25 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
   const timeFmt = useMemo(() => new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }), [locale]);
   const liveWeekPost = (posts ?? []).find((p) => p.id === weekPostId) ?? null;
 
+  // Drag & drop rescheduling: dropping a SCHEDULED chip on another day keeps the time-of-day.
+  // The post id comes from dataTransfer (authoritative) — React state may lag behind native events.
+  const dropOnDay = (day: Date, postId: string | null) => {
+    const k = dayKey(day);
+    setDragOverDay(null);
+    setDragPostId(null);
+    if (!postId) return;
+    const post = (posts ?? []).find((p) => p.id === postId);
+    if (!post) return;
+    if (post.status !== "SCHEDULED") {
+      toast.warning(t("publishing.weekDragLocked"));
+      return;
+    }
+    const old = new Date(post.scheduledAt);
+    if (dayKey(old) === k) return; // same day — nothing to change
+    const next = new Date(day.getFullYear(), day.getMonth(), day.getDate(), old.getHours(), old.getMinutes());
+    void reschedule(post, toLocalInput(next));
+  };
+
   return (
     <div className="grid gap-5">
       {/* header */}
@@ -409,11 +430,28 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
               const k = dayKey(d);
               const dayPosts = postsByDay[k] ?? [];
               const isToday = k === todayKey;
+              const isDropTarget = dragOverDay === k && dragPostId !== null;
               return (
                 <div
                   key={k}
                   role="row"
-                  className={`flex min-h-24 flex-col gap-1.5 rounded-xl border p-2 ${isToday ? "neon-border bg-[var(--neon)]/[0.06]" : "border-border/60 bg-muted/20"}`}
+                  onDragOver={(e) => {
+                    // always allow the drop — id is resolved from dataTransfer in onDrop
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dragPostId) setDragOverDay(k);
+                  }}
+                  onDragLeave={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverDay((cur) => (cur === k ? null : cur));
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const id = e.dataTransfer.getData("text/plain") || dragPostId;
+                    dropOnDay(d, id);
+                  }}
+                  className={`flex min-h-24 flex-col gap-1.5 rounded-xl border p-2 transition-colors ${
+                    isDropTarget ? "drop-target bg-[var(--neon)]/[0.08]" : isToday ? "neon-border bg-[var(--neon)]/[0.06]" : "border-border/60 bg-muted/20"
+                  }`}
                 >
                   <div className="flex items-baseline justify-between gap-1">
                     <span className={`text-[11px] font-semibold capitalize ${isToday ? "text-[var(--neon)]" : "text-muted-foreground"}`}>
@@ -422,22 +460,39 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
                     <span className={`text-[11px] ${isToday ? "font-bold text-[var(--neon)]" : "text-muted-foreground"}`}>{d.getDate()}</span>
                   </div>
                   {dayPosts.length === 0 ? (
-                    <span className="text-[10px] text-muted-foreground/50">—</span>
+                    <span className={`text-[10px] ${isDropTarget ? "font-medium text-[var(--neon)]" : "text-muted-foreground/50"}`}>
+                      {isDropTarget ? t("publishing.weekDropHere") : "—"}
+                    </span>
                   ) : (
                     dayPosts.map((p) => {
                       const accent = postStatusAccent(p.status);
+                      const draggable = p.status === "SCHEDULED";
                       return (
                         <button
                           key={p.id}
                           type="button"
+                          draggable={draggable}
+                          onDragStart={(e) => {
+                            if (!draggable) return;
+                            e.dataTransfer.setData("text/plain", p.id);
+                            e.dataTransfer.effectAllowed = "move";
+                            setDragPostId(p.id);
+                          }}
+                          onDragEnd={() => {
+                            setDragPostId(null);
+                            setDragOverDay(null);
+                          }}
                           onClick={() => { setWeekPostId(p.id); setWeekReschedValue(toLocalInput(new Date(p.scheduledAt))); }}
-                          className={`w-full rounded-lg border px-1.5 py-1 text-left transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--neon)]/60 ${accent.className ?? ""}`}
+                          className={`w-full rounded-lg border px-1.5 py-1 text-left transition hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--neon)]/60 ${accent.className ?? ""} ${
+                            draggable ? "lift cursor-grab active:cursor-grabbing" : ""
+                          } ${dragPostId === p.id ? "opacity-40" : ""}`}
                           style={accent.style}
-                          aria-label={`${new Date(p.scheduledAt).toLocaleTimeString()} · ${p.contentItem?.title ?? p.platform}`}
+                          aria-label={`${new Date(p.scheduledAt).toLocaleTimeString()} · ${p.contentItem?.title ?? p.platform}${draggable ? ` · ${t("publishing.weekDragA11y")}` : ""}`}
                         >
                           <span className="flex items-center gap-1 text-[10px] font-semibold opacity-90">
                             <PlatformIcon platform={p.platform} className="h-3 w-3 shrink-0" />
                             {timeFmt.format(new Date(p.scheduledAt))}
+                            {draggable && <GripVertical className="ml-auto h-3 w-3 shrink-0 opacity-40" aria-hidden />}
                           </span>
                           <span className="line-clamp-2 text-[11px] leading-tight">{p.contentItem?.title ?? p.platform}</span>
                         </button>
@@ -465,7 +520,12 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
           {!posts ? (
             <div className="grid gap-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 rounded-xl bg-muted/40" />)}</div>
           ) : posts.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">{t("publishing.noScheduled")}</p>
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <span className="rounded-full p-3" style={{ background: "color-mix(in oklab, var(--neon-2) 10%, transparent)" }}>
+                <CalendarClock className="h-6 w-6 text-[var(--neon-2)]" aria-hidden />
+              </span>
+              <p className="max-w-sm text-sm text-muted-foreground">{t("publishing.noScheduled")}</p>
+            </div>
           ) : (
             <ul className="grid gap-2">
               {posts.map((p) => {

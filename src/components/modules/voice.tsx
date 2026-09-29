@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   AudioLines, Loader2, Save, Music, UserSquare, Ban, History, BookmarkCheck,
+  Mic, FileAudio, Copy, X, Check,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api } from "@/lib/use-i18n";
@@ -29,6 +30,13 @@ interface TtsResponse { jobId: string; assetId: string; url: string }
 interface RecentVoice { assetId: string; url: string; text: string; voice: string; speed: number; ts: number }
 interface LocalProfile { id: string; name: string; voiceId: string; language: string; speed: number; ts: number }
 
+const ASR_MAX_BYTES = 25 * 1024 * 1024;
+const ASR_EXT = /\.(wav|mp3|m4a|flac|ogg|webm|aac)$/i;
+
+function fmtSize(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 export function VoiceModule() {
   const { t, locale } = useI18n();
   const activeBrandId = useApp((s) => s.activeBrandId);
@@ -47,9 +55,18 @@ export function VoiceModule() {
   const [profileName, setProfileName] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // speech-to-text (ASR)
+  const [asrFile, setAsrFile] = useState<File | null>(null);
+  const [asrBusy, setAsrBusy] = useState(false);
+  const [asrDragOver, setAsrDragOver] = useState(false);
+  const [asrResult, setAsrResult] = useState("");
+  const [asrCopied, setAsrCopied] = useState(false);
+  const asrInputRef = useRef<HTMLInputElement>(null);
+
   // honest registry statuses (BLOCKED_EXTERNAL honesty is a product requirement)
   const musicProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "elevenlabs");
   const avatarProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "heygen");
+  const asrProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "zai-asr");
 
   const loadVoices = useCallback(async () => {
     try {
@@ -109,6 +126,63 @@ export function VoiceModule() {
       showStudioError(t, err);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // ---------- ASR: speech-to-text ----------
+  const acceptAsrFile = (file: File | null | undefined) => {
+    if (!file) return;
+    if (!ASR_EXT.test(file.name)) {
+      toast.warning(t("studio.voc.asr.badType"), { description: file.name });
+      return;
+    }
+    if (file.size > ASR_MAX_BYTES) {
+      toast.warning(t("studio.voc.asr.tooBig"), { description: `${fmtSize(file.size)} > 25 MB` });
+      return;
+    }
+    setAsrFile(file);
+    setAsrResult("");
+  };
+
+  const transcribe = async () => {
+    if (!asrFile) {
+      toast.warning(t("studio.voc.asr.needFile"));
+      return;
+    }
+    setAsrBusy(true);
+    pulseCore("GENERATING");
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(new Error("File read failed"));
+        reader.readAsDataURL(asrFile);
+      });
+      const res = await api<{ text: string; provider?: string; deduplicated?: boolean }>("/api/generate/asr", {
+        method: "POST",
+        body: JSON.stringify({ base64: dataUrl, fileName: asrFile.name, sizeBytes: asrFile.size, brandId: activeBrandId ?? undefined }),
+      });
+      setAsrResult(res.text);
+      setAsrCopied(false);
+      pulseCore("SUCCESS");
+      toast.success(t("studio.voc.asr.done"), { description: `${asrFile.name}${res.deduplicated ? " · cached" : ""}` });
+    } catch (err) {
+      pulseCore("ERROR");
+      showStudioError(t, err);
+    } finally {
+      setAsrBusy(false);
+    }
+  };
+
+  const copyAsr = async () => {
+    if (!asrResult) return;
+    try {
+      await navigator.clipboard.writeText(asrResult);
+      setAsrCopied(true);
+      toast.success(t("common.copied"));
+      window.setTimeout(() => setAsrCopied(false), 1600);
+    } catch {
+      toast.error(t("common.error"));
     }
   };
 
@@ -286,6 +360,111 @@ export function VoiceModule() {
           ))}
         </div>
       </div>
+
+      {/* speech-to-text (ASR) */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Mic className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("studio.voc.asr.title")}
+          </CardTitle>
+          {asrProvider && (
+            <Badge variant="outline" className="text-[10px] text-muted-foreground" title={asrProvider.statusNote ?? undefined}>
+              {asrProvider.providerId} · {asrProvider.status}
+            </Badge>
+          )}
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-2">
+          {/* dropzone */}
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={t("studio.voc.asr.dropzone")}
+            onClick={() => asrInputRef.current?.click()}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); asrInputRef.current?.click(); } }}
+            onDragOver={(e) => { e.preventDefault(); setAsrDragOver(true); }}
+            onDragLeave={() => setAsrDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setAsrDragOver(false);
+              acceptAsrFile(e.dataTransfer.files?.[0]);
+            }}
+            className={`dropzone flex min-h-36 cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-6 text-center transition ${
+              asrDragOver ? "dropzone-active" : "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--neon)]/60"
+            }`}
+          >
+            <input
+              ref={asrInputRef}
+              type="file"
+              accept=".wav,.mp3,.m4a,.flac,.ogg,.webm,.aac,audio/*"
+              className="hidden"
+              aria-hidden
+              tabIndex={-1}
+              onChange={(e) => { acceptAsrFile(e.target.files?.[0]); e.currentTarget.value = ""; }}
+            />
+            {asrFile ? (
+              <>
+                <FileAudio className="h-8 w-8 text-[var(--neon-2)]" aria-hidden />
+                <p className="max-w-full truncate px-2 text-sm font-medium">{asrFile.name}</p>
+                <p className="text-[11px] text-muted-foreground">{fmtSize(asrFile.size)}</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="min-h-9 gap-1 text-xs"
+                  onClick={(e) => { e.stopPropagation(); setAsrFile(null); setAsrResult(""); }}
+                  aria-label={t("common.delete")}
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden /> {t("common.delete")}
+                </Button>
+              </>
+            ) : (
+              <>
+                <motion.span
+                  animate={{ y: asrDragOver ? -4 : 0 }}
+                  className="rounded-full p-3"
+                  style={{ background: "color-mix(in oklab, var(--neon) 12%, transparent)" }}
+                >
+                  <Mic className="h-6 w-6 text-[var(--neon)]" aria-hidden />
+                </motion.span>
+                <p className="text-sm font-medium">{t("studio.voc.asr.dropzone")}</p>
+                <p className="text-[11px] text-muted-foreground">{t("studio.voc.asr.formats")}</p>
+              </>
+            )}
+          </div>
+
+          {/* result */}
+          <div className="grid content-start gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="asr-result">{t("studio.voc.asr.result")}</Label>
+              <div className="flex items-center gap-2">
+                {asrResult && (
+                  <>
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("studio.voc.asr.words", { n: asrResult.trim().split(/\s+/).filter(Boolean).length })}
+                    </span>
+                    <Button size="icon" variant="outline" className="h-8 w-8" onClick={copyAsr} aria-label={t("common.copy")}>
+                      {asrCopied ? <Check className="h-3.5 w-3.5 text-[var(--neon-2)]" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+            <Textarea
+              id="asr-result"
+              value={asrResult}
+              onChange={(e) => setAsrResult(e.target.value)}
+              placeholder={asrBusy ? t("studio.voc.asr.working") : t("studio.voc.asr.resultPh")}
+              rows={6}
+              className="resize-none"
+              disabled={asrBusy}
+            />
+            <Button onClick={transcribe} disabled={asrBusy || !asrFile} className="min-h-11 gap-2 font-semibold">
+              {asrBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+              {asrBusy ? t("studio.voc.asr.working") : t("studio.voc.asr.cta")}
+            </Button>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">{t("studio.voc.asr.note")}</p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* recent voiceovers */}
       <Card className="glass rounded-2xl">

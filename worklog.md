@@ -165,3 +165,33 @@ Stage Summary:
 - Скриншоты: tool-results/qa-week-widget.png, qa-export-menu.png, qa-export-toast.png, qa-dedup.png
 - Риски: нет известных; тур-флаг уже записан у тестового пользователя (автостарт не повторится — это ожидаемо)
 - Кандидаты next: экспорт всей контент-кампании (multi-item ZIP), drag-and-drop в week board Publishing, тёмная/светлая тема toggle, A/B варианты постов, интеграция ASR в голосовой модуль
+
+---
+Task ID: 8
+Agent: main (cron webDevReview #3)
+Task: QA-проход #3 + 2 новые фичи (ASR speech-to-text, drag-and-drop week board) + стайлинг
+
+Work Log:
+- Инфраструктура: обнаружил, что dev-сервер не переживает между Bash-вызовами сандбокса (процессы реапаются) → все проверки собраны в mega-call скрипты (start server → QA → stop) в tool-results/qa*.sh; QA-проход всех 13 views: 0 консольных ошибок, 0 hydration, deep-links работают
+- НОВАЯ ФИЧА: Speech-to-text (ASR) в Voice Studio:
+  - src/lib/ai/zai.ts: asrTranscribe() — zai.audio.asr.create({file_base64}) с защитой от альтернативных форм ответа SDK
+  - NEW /api/generate/asr: requireUser, валидация (25MB cap, whitelist расширений wav/mp3/m4a/flac/ogg/webm/aac), jobs.create kind=TRANSCRIPTION (ledger пишется внутри jobs.create), idempotency (dedup по outputJson), markCompleted(outputJson{text}), audit asr.transcribe, честная 502 GENERATION_FAILED c canRetry
+  - voice.tsx: карточка ASR с dropzone (drag-and-drop файла + клик + Enter/Space a11y), выбор файла с валидацией (тип/размер тосты), результат — редактируемый textarea + word count + copy-кнопка (check-иконка после копирования), honest badge провайдера (zai-asr · IMPLEMENTED_NOT_LIVE_VERIFIED, title=statusNote)
+  - VERIFIED реально: TTS сгенерил армянский аудио (306KB) → POST /api/generate/asr → провайдер вернул транскрипт (zai-asr жив); guard: evil.exe → VALIDATION 400; UI: drop bad.txt → тост «Անհայտ աուդիո ֆորմատ»
+- НОВАЯ ФИЧА: Drag-and-drop reschedule в week board Publishing:
+  - Чипы SCHEDULED постов draggable (cursor-grab, lift, GripVertical иконка, opacity при драге); не-SCHEDULED не перетаскиваются (weekDragLocked тост при Defensive drop)
+  - Ячейки дней: onDragOver always preventDefault (drop разрешён), drop-target dashed outline + neon фон, empty-ячейка показывает «Թողեք այստեղ» во время драга; drop сохраняет время суток (HH:mm) и меняет только дату → существующий reschedule() (PATCH reschedule) → success тост
+  - БАГ-ФИКС по ходу верификации: первая реализация читала postId из React state (dragPostId) — при синтетическом drag-событии state не флашится между dragstart и drop (React batching) → drop молча игнорился. ФИКС: postId читается из e.dataTransfer.getData("text/plain") в onDrop (стандартный HTML5 паттерн, устойчив к батчингу), state остался только для визуала (highlight/opacity)
+  - VERIFIED браузером (синтетический DragEvent-сценарий): highlight=true во время dragover, drop → тост «Ժամը թարմացված է», scheduledAt сменился с 2026-09-30 на 2026-09-28 c сохранением времени 10:00 — DRAG-RESCHEDULE OK
+- СТАЙЛИНГ: globals.css +3 утилиты: .dropzone (неоновая dashed граница + hover glow + active inset shadow), .lift (hover translateY+neon shadow, отключается при prefers-reduced-motion), .drop-target (dashed outline — ring не умеет dashed); Publishing: empty-state scheduled posts с неоновой иконкой CalendarClock вместо голого текста
+- i18n: studio.ts +14 ключей (studio.voc.asr.*) ×3 локали, publishing.ts +3 (weekDragLocked/weekDropHere/weekDragA11y) + обновлён weekHint (drag-инструкция) ×3; parity-скрипт: studio 160×3 PARITY-OK, publishing 122×3 PARITY-OK
+- bun run lint 0 ошибок; bunx tsc --noEmit 0 ошибок (вне pre-existing examples/skills); dev.log зелёный
+- Скриншоты: tool-results/qa3-voice-desktop.png, qa3-week-desktop.png, qa3-weekboard-after.png, qa3-voice-final.png
+- Тестовые данные: создан изолированный QA-аккаунт qa3@haydev.am (QA3 Brand, 1 TTS-ассет, 1 drag-тест пост Mon 28) — данные не смешиваются с основным тестовым юзером
+
+Stage Summary:
+- 2 новые фичи полностью верифицированы: ASR (реальный провайдерский вызов прошёл) + drag-and-drop week board (реальный reschedule через UI-события)
+- 1 баг найден и исправлен в процессе (React state batching vs native drag events → dataTransfer как источник истины)
+- Стайлинг: dropzone/lift/drop-target утилиты, publishing empty-state
+- Риски: ASR качество распознавания армянского — провайдерное («Indac, Tandia High Dev Marketing Indac» для TTS-армянского); интеграция корректна
+- Кандидаты next: экспорт всей контент-кампании (multi-item ZIP), A/B варианты постов, web search в Trends с реальными источниками, drag-and-drop переносы с сохранением точного времени через пикер, batch-генерация сценариев

@@ -271,6 +271,26 @@ function pcmToWav(pcm: Buffer, sampleRate: number, channels: number, bitsPerSamp
   return Buffer.concat([header, pcm]);
 }
 
+// ---------- ASR (speech-to-text) ----------
+
+export async function asrTranscribe(opts: { base64: string }): Promise<{ text: string }> {
+  const zai = await getZai();
+  const res = (await zai.audio.asr.create({ file_base64: opts.base64 })) as unknown as {
+    text?: string;
+    data?: string | { text?: string };
+  };
+  const text =
+    typeof res?.text === "string"
+      ? res.text
+      : typeof res?.data === "string"
+        ? res.data
+        : typeof res?.data?.text === "string"
+          ? res.data.text
+          : "";
+  if (!text.trim()) throw new Error("ASR returned empty transcription");
+  return { text: text.trim() };
+}
+
 // ---------- Research ----------
 
 export async function webSearch(opts: { query: string; num?: number; recencyDays?: number }) {

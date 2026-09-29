@@ -1,0 +1,8 @@
+SERVER READY code=200
+"ok"
+voice view:
+"{\"dropzone\":true,\"asrBadge\":\"zai-asr · IMPLEMENTED_NOT_LIVE_VERIFIED\"}"
+publishing view:
+"{\"chips\":1,\"gripIcons\":1,\"emptyState\":\"dash-present\"}"
+=== DONE ===
+server stopped
