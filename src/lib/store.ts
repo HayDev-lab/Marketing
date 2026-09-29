@@ -44,12 +44,15 @@ interface AppState {
   activeBrandId: string | null;
   mode: "manual" | "autopilot";
   coreState: CoreState;
+  /** Transient: content item id that Content should auto-open once on next mount (trend → draft bridge). */
+  contentSeed: string | null;
   setUser: (u: SessionUser | null) => void;
   setLocale: (l: Locale) => void;
   setView: (v: ViewId) => void;
   setActiveBrand: (id: string | null) => void;
   setMode: (m: "manual" | "autopilot") => void;
   setCoreState: (s: CoreState) => void;
+  setContentSeed: (id: string | null) => void;
 }
 
 export const useApp = create<AppState>()(
@@ -61,12 +64,14 @@ export const useApp = create<AppState>()(
       activeBrandId: null,
       mode: "manual",
       coreState: "IDLE",
+      contentSeed: null,
       setUser: (user) => set({ user }),
       setLocale: (locale) => set({ locale }),
       setView: (view) => set({ view }),
       setActiveBrand: (activeBrandId) => set({ activeBrandId }),
       setMode: (mode) => set({ mode }),
       setCoreState: (coreState) => set({ coreState }),
+      setContentSeed: (contentSeed) => set({ contentSeed }),
     }),
     {
       name: "haydev-app",

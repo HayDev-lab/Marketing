@@ -254,6 +254,17 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
     }
   }, [t]);
 
+  // Trend → Content bridge: auto-open the AI draft that was just created in Trends (consumed once)
+  const contentSeed = useApp((s) => s.contentSeed);
+  const setContentSeed = useApp((s) => s.setContentSeed);
+  useEffect(() => {
+    if (contentSeed) {
+      const id = contentSeed;
+      setContentSeed(null);
+      openDetail(id);
+    }
+  }, [contentSeed, setContentSeed, openDetail]);
+
   const saveEdits = async () => {
     if (!detail) return;
     setSaving(true);

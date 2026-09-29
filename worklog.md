@@ -195,3 +195,30 @@ Stage Summary:
 - Стайлинг: dropzone/lift/drop-target утилиты, publishing empty-state
 - Риски: ASR качество распознавания армянского — провайдерное («Indac, Tandia High Dev Marketing Indac» для TTS-армянского); интеграция корректна
 - Кандидаты next: экспорт всей контент-кампании (multi-item ZIP), A/B варианты постов, web search в Trends с реальными источниками, drag-and-drop переносы с сохранением точного времени через пикер, batch-генерация сценариев
+
+---
+Task ID: 9
+Agent: main (cron webDevReview #4)
+Task: QA-проход #4 + фичи (реальные источники и evidence в Trends, мост тренд→AI-драфт→Content) + honest-degradation фолбэк + retry + стайлинг
+
+Work Log:
+- Инфраструктура: dev-сервер был SIGTERM-нут; перезапущен (nohup bun run dev) и на этот раз переживает между Bash-вызовами — QA без mega-call скриптов
+- QA: все 13 views — 0 консольных ошибок, deep-links работают; сессия браузера истекла (показан auth-view — ожидаемо) → зарегистрирован изолированный QA-аккаунт qa4@haydev.am (пароль HayDev-QA4-2026!, бренд QA4 Coffee Roasters) — данные предыдущих юзеров не тронуты
+- Подтверждён фикс синка бренда в Trends из пред. сессии: #tr-brand показывает активный бренд сразу после reload (derived state работает)
+- ФИКС (надёжность): webSearch в zai.ts — 1 retry с backoff 8s: upstream serper-зеркало жёстко рейт-лимитит (первый вызов дня ок, все последующие 429 «400 Bad Request … 42900»)
+- НОВАЯ ФИЧА (honest degradation): POST /api/trends при недоступности web_search НЕ падает, а возвращает LLM-гипотезы: каждый item HYPOTHESIS, confidence ≤0.4, без evidence/metrics, sourceName «LLM hypothesis (unverified)», пустой sourceUrl (фронт рендерит span вместо ссылки), risk отмечает отсутствие верификации; ответ несёт searchFallback=true; jobs.markCompleted + audit помечают фолбэк
+- НОВАЯ ФИЧА (реальные источники в Trends): POST /api/trends возвращает полный массив sources (раньше только count); GET и POST сериализуются через serializeTrend: parsed evidence[] (quote+source+observedAt, до 4) + metricsObserved, сырые JSON-строки из ответа вырезаны
+- НОВАЯ ФИЧА (UI Trends): панель «Իրական աղբյուրներ/Реальные источники» после поиска — 6 карточек источников (rank-chip 01–06, host, дата, заголовок, external-link на hover, stagger-анимация, свёртывается шевроном); компактный evidence-превью на карточке тренда (quote-accent, line-clamp-2 + ссылка на host) — рендерится ТОЛЬКО у трендов из живого поиска; бейдж наблюдаемых метрик (Activity, neon-3, title=полный текст); amber-баннер фолбэка (ShieldAlert + trends.fallbackNotice)
+- НОВАЯ ФИЧА (мост Trend → Content): кнопка «Ստեղծել նախագիծ / Create draft» на карточке тренда → POST /api/content {aiWrite:true, brief:suggestedAdaptation, linkTrend, trendId, meta.fromTrend} (эндпоинт уже поддерживал trendId/linkTrend — теперь их впервые использует UI) → AI пишет платформенный копирайт grounded в бренд-профиль → transient contentSeed в zustand (не persisted) → setView("content") → Content авто-открывает detail-диалог нового драфта (seed consumed once); без бренда — тост needBrand
+- Верификация браузером: реальный поиск (API) вернул 4 тренда (3 VERIFIED_TREND + 1 EMERGING_SIGNAL) с evidence-цитатами и метрикой «28% of specialty coffee sales by 2026, 35% profit lift»; UI-поиск при 429 → честный фолбэк: amber-баннер + 4 × HYPOTHESIS + unverified-источник + риск, без фиктивных evidence; «Create draft» → диалог авто-открылся с AI-копирайтом (hook/caption/hashtags/script), DRAFT v1, связка trendId+meta.fromTrend подтверждена через API; sources-панель отрендерена детерминированно (fetch-stub с кэшем реального ответа провайдера): 6 rank-chip'ов + hosts javacity.com/uschamber.com/…; evidence-превью появился ровно на 4 реальных трендах и ни на одном гипотезном; mobile 390px без горизонтального overflow; консоль 0 ошибок по всем 13 views после изменений
+- Стайлинг: globals.css +3 утилиты — .rank-chip (неоновый квадрат ранга), .source-card (glass + hover glow + lift 1px), .quote-accent (неоновая левая риска + курсив цитаты), все с prefers-reduced-motion
+- i18n: trends.ts +12 ключей ×3 локали (sourcesTitle, sourcesHint, evidenceTitle, metrics, toDraft, drafting, toDraftDone, needBrand, fallbackNotice) — PARITY-OK 45×3
+- bun run lint 0 ошибок; bunx tsc --noEmit 0 ошибок (вне pre-existing examples/skills)
+- Скриншоты: tool-results/qa4-trend-draft-dialog.png, qa4-sources-panel.png, qa4-trend-evidence-card.png
+- Тестовые данные: qa4-юзер + бренд + 12 трендов + 1 AI-драфт (изолированный аккаунт); onboarding-тур автостартует на новом юзере (побочно верифицирован — оверлей перехватывает клики, Escape закрывает)
+
+Stage Summary:
+- 3 фичи верифицированы: серфейс реальных источников + evidence в Trends, honest-degradation фолбэк при недоступности поиска, мост тренд→AI-драфт→Content с автооткрытием диалога
+- 1 надёжностный фикс: webSearch retry/backoff (429 upstream)
+- Риски: web_search провайдер (serper-зеркало) лимитирован большую часть дня — фолбэк покрывает UX, но live-данные недоступны до восстановления квоты; aiWrite может писать не на запрошенном языке (просили hy — получил en: провайдерное качество промпта)
+- Кандидаты next: усилить языковую директиву aiWrite, экспорт кампании ZIP, A/B варианты постов, виджет источников на дашборде, периодический TREND_SEARCH в autopilot

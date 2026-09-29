@@ -295,12 +295,21 @@ export async function asrTranscribe(opts: { base64: string }): Promise<{ text: s
 
 export async function webSearch(opts: { query: string; num?: number; recencyDays?: number }) {
   const zai = await getZai();
-  const results = await zai.functions.invoke("web_search", {
-    query: opts.query,
-    num: opts.num ?? 8,
-    recency_days: opts.recencyDays,
-  });
-  return results;
+  let lastErr: unknown;
+  // one retry with backoff — the upstream search provider rate-limits rapid consecutive calls (429)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 8000));
+      return await zai.functions.invoke("web_search", {
+        query: opts.query,
+        num: opts.num ?? 8,
+        recency_days: opts.recencyDays,
+      });
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("web_search failed");
 }
 
 export async function pageRead(url: string) {

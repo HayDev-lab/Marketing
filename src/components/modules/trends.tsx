@@ -17,10 +17,12 @@ import {
 } from "@/components/ui/select";
 import {
   Flame, Search, Loader2, ExternalLink, Sparkles, ShieldAlert, Copy, Radar,
-  ChevronDown, ChevronUp, Gauge,
+  ChevronDown, ChevronUp, Gauge, Globe2, Activity, FilePlus2, Quote,
 } from "lucide-react";
 
 // ---------- types ----------
+interface EvidenceQuote { quote: string; source: string; observedAt: string }
+interface TrendSource { name: string; url: string; snippet: string; host: string; date: string | null }
 interface TrendDto {
   id: string;
   title: string;
@@ -39,6 +41,8 @@ interface TrendDto {
   concept: string | null;
   hook: string | null;
   script: string | null;
+  evidence?: EvidenceQuote[];
+  metricsObserved?: string | null;
   createdAt: string;
 }
 interface BrandLite { id: string; name: string }
@@ -58,6 +62,8 @@ const STATUSES = ["VERIFIED_TREND", "POPULAR_TOPIC", "EMERGING_SIGNAL", "HYPOTHE
 export function TrendsModule() {
   const { t, locale, locales, localeLabels } = useI18n();
   const activeBrandId = useApp((s) => s.activeBrandId);
+  const setView = useApp((s) => s.setView);
+  const setContentSeed = useApp((s) => s.setContentSeed);
 
   const [brands, setBrands] = useState<BrandLite[]>([]);
   // null = no explicit choice yet → derive from the active brand (effect-free, always in sync)
@@ -71,7 +77,13 @@ export function TrendsModule() {
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [adaptingId, setAdaptingId] = useState<string | null>(null);
+  const [draftingId, setDraftingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // real web-search results backing the latest Trend Agent run
+  const [sources, setSources] = useState<TrendSource[]>([]);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  // honest degradation: live search unavailable → LLM hypotheses (unverified)
+  const [searchFallback, setSearchFallback] = useState(false);
 
   // keep trend language in sync with UI locale
   useEffect(() => {
@@ -101,7 +113,7 @@ export function TrendsModule() {
     setSearching(true);
     pulseCore("TREND_SEARCH");
     try {
-      const res = await api<{ jobId: string; trends: TrendDto[]; sources: number }>("/api/trends", {
+      const res = await api<{ jobId: string; trends: TrendDto[]; sources: TrendSource[]; sourcesCount: number; searchFallback?: boolean }>("/api/trends", {
         method: "POST",
         body: JSON.stringify({
           brandId: brandId === "none" ? undefined : brandId,
@@ -113,11 +125,52 @@ export function TrendsModule() {
       pulseCore("SUCCESS");
       toast.success(t("trends.found", { count: res.trends.length }));
       setTrends((prev) => [...res.trends, ...prev]);
+      setSources(res.sources ?? []);
+      setSourcesOpen(true);
+      setSearchFallback(Boolean(res.searchFallback));
     } catch (e) {
       pulseCore("ERROR");
       toast.error(errMessage(e));
     } finally {
       setSearching(false);
+    }
+  };
+
+  // Trend → Content bridge: AI writes a platform-native draft grounded in the trend adaptation,
+  // then Content auto-opens the new draft via the transient contentSeed
+  const draftFromTrend = async (tr: TrendDto) => {
+    const targetBrandId = brandId !== "none" ? brandId : activeBrandId ?? brands[0]?.id;
+    if (!targetBrandId) {
+      toast.error(t("trends.needBrand"));
+      return;
+    }
+    setDraftingId(tr.id);
+    pulseCore("GENERATING");
+    try {
+      const item = await api<{ id: string }>("/api/content", {
+        method: "POST",
+        body: JSON.stringify({
+          brandId: targetBrandId,
+          title: tr.title,
+          platform: tr.platform && tr.platform !== "web" ? tr.platform : "instagram",
+          language,
+          contentType: tr.platform === "tiktok" ? "VIDEO_REEL" : "IMAGE_POST",
+          aiWrite: true,
+          brief: tr.suggestedAdaptation ?? tr.summary ?? tr.title,
+          linkTrend: tr.sourceUrl,
+          trendId: tr.id,
+          meta: { fromTrend: tr.id, fromTrendSource: tr.sourceUrl },
+        }),
+      });
+      pulseCore("SUCCESS");
+      toast.success(t("trends.toDraftDone"));
+      setContentSeed(item.id);
+      setView("content");
+    } catch (e) {
+      pulseCore("ERROR");
+      toast.error(errMessage(e));
+    } finally {
+      setDraftingId(null);
     }
   };
 
@@ -151,6 +204,9 @@ export function TrendsModule() {
   };
 
   const hasAdaptation = (tr: TrendDto) => Boolean(tr.concept || tr.hook || tr.script);
+  const hostOf = (url: string) => {
+    try { return new URL(url).host; } catch { return url; }
+  };
 
   return (
     <div className="grid gap-5">
@@ -232,11 +288,89 @@ export function TrendsModule() {
         </Card>
       </motion.section>
 
+      {/* real sources backing the latest Trend Agent run */}
+      {sources.length > 0 && (
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          aria-label={t("trends.sourcesTitle")}
+        >
+          <Card className="glass rounded-2xl">
+            <CardHeader className="pb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <span
+                    className="rounded-lg p-1.5"
+                    style={{ background: "color-mix(in oklab, var(--neon-2) 15%, transparent)" }}
+                  >
+                    <Globe2 className="h-4 w-4 text-[var(--neon-2)]" />
+                  </span>
+                  {t("trends.sourcesTitle")}
+                  <Badge variant="outline" className="text-[10px]" aria-label={String(sources.length)}>
+                    {sources.length}
+                  </Badge>
+                </CardTitle>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  onClick={() => setSourcesOpen((o) => !o)}
+                  aria-expanded={sourcesOpen}
+                  aria-label={t("trends.sourcesTitle")}
+                >
+                  {sourcesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">{t("trends.sourcesHint")}</p>
+            </CardHeader>
+            {sourcesOpen && (
+              <CardContent className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {sources.map((s, i) => (
+                  <motion.a
+                    key={`${s.url}-${i}`}
+                    href={s.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: Math.min(i * 0.04, 0.25) }}
+                    className="source-card group/source"
+                    aria-label={`${s.host || "web"}: ${s.name}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="rank-chip" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs font-semibold">{s.host || s.name}</span>
+                      {s.date && <span className="shrink-0 text-[10px] text-muted-foreground">{s.date}</span>}
+                      <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/source:opacity-100" aria-hidden="true" />
+                    </div>
+                    <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{s.name}</p>
+                  </motion.a>
+                ))}
+              </CardContent>
+            )}
+          </Card>
+        </motion.section>
+      )}
+
       {/* trend feed */}
       <section aria-label={t("trends.feed")} className="grid gap-4">
         <h2 className="flex items-center gap-2 text-sm font-medium tracking-wide text-muted-foreground">
           <Flame className="h-4 w-4 text-[var(--neon)]" /> {t("trends.feed")}
         </h2>
+
+        {searchFallback && (
+          <div
+            role="status"
+            className="flex items-start gap-2 rounded-xl border p-3 text-[13px] leading-relaxed"
+            style={{
+              borderColor: "color-mix(in oklab, var(--neon-3) 35%, transparent)",
+              background: "color-mix(in oklab, var(--neon-3) 8%, transparent)",
+            }}
+          >
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--neon-3)]" aria-hidden="true" />
+            <span>{t("trends.fallbackNotice")}</span>
+          </div>
+        )}
 
         {loading ? (
           [...Array(3)].map((_, i) => <Skeleton key={i} className="h-44 rounded-2xl bg-muted/40" />)
@@ -291,7 +425,30 @@ export function TrendsModule() {
                       <span className="inline-flex items-center gap-1">
                         <Gauge className="h-3 w-3" /> {t("trends.confidence")}: {Math.round(tr.confidence * 100)}%
                       </span>
+                      {tr.metricsObserved && (
+                        <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-0.5" title={tr.metricsObserved}>
+                          <Activity className="h-3 w-3 shrink-0 text-[var(--neon-3)]" aria-hidden="true" />
+                          <span className="max-w-48 truncate font-medium text-[var(--neon-3)]">{tr.metricsObserved}</span>
+                        </span>
+                      )}
                     </div>
+
+                    {tr.evidence && tr.evidence.length > 0 && (
+                      <blockquote className="quote-accent">
+                        <p className="line-clamp-2 text-[13px] leading-relaxed">{tr.evidence[0].quote}</p>
+                        {tr.evidence[0].source && (
+                          <a
+                            href={tr.evidence[0].source}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-[var(--neon-2)] hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                            {hostOf(tr.evidence[0].source)}
+                          </a>
+                        )}
+                      </blockquote>
+                    )}
 
                     {tr.brandFitScore != null && (
                       <div className="grid gap-1.5">
@@ -338,16 +495,24 @@ export function TrendsModule() {
                     )}
 
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3">
-                      <a
-                        href={tr.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground underline-offset-2 hover:text-[var(--neon-2)] hover:underline"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        <span className="max-w-52 truncate">{tr.sourceName || tr.sourceUrl}</span>
-                        <span className="sr-only">{t("trends.source")}</span>
-                      </a>
+                      {tr.sourceUrl ? (
+                        <a
+                          href={tr.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground underline-offset-2 hover:text-[var(--neon-2)] hover:underline"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          <span className="max-w-52 truncate">{tr.sourceName || tr.sourceUrl}</span>
+                          <span className="sr-only">{t("trends.source")}</span>
+                        </a>
+                      ) : (
+                        <span className="inline-flex h-8 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground">
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span className="max-w-52 truncate">{tr.sourceName || "—"}</span>
+                          <span className="sr-only">{t("trends.source")}</span>
+                        </span>
+                      )}
                       <div className="flex items-center gap-2">
                         {adapted && (
                           <Button
@@ -362,6 +527,17 @@ export function TrendsModule() {
                             {t("trends.adaptedPanel")}
                           </Button>
                         )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-9 gap-1.5 sm:h-10"
+                          onClick={() => draftFromTrend(tr)}
+                          disabled={draftingId === tr.id}
+                          aria-label={t("trends.toDraft")}
+                        >
+                          {draftingId === tr.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <FilePlus2 className="h-4 w-4" />}
+                          <span className="hidden sm:inline">{draftingId === tr.id ? t("trends.drafting") : t("trends.toDraft")}</span>
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
@@ -382,6 +558,29 @@ export function TrendsModule() {
                         animate={{ opacity: 1, height: "auto" }}
                         className="grid gap-3 overflow-hidden rounded-xl border border-border/60 bg-muted/20 p-3"
                       >
+                        {tr.evidence && tr.evidence.length > 0 && (
+                          <div className="grid gap-2">
+                            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--neon-2)]">
+                              <Quote className="h-3.5 w-3.5" aria-hidden="true" /> {t("trends.evidenceTitle")}
+                            </p>
+                            {tr.evidence.map((q, qi) => (
+                              <blockquote key={qi} className="quote-accent">
+                                <p className="text-[13px] leading-relaxed">{q.quote}</p>
+                                {q.source && (
+                                  <a
+                                    href={q.source}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-[var(--neon-2)] hover:underline"
+                                  >
+                                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                                    {hostOf(q.source)}
+                                  </a>
+                                )}
+                              </blockquote>
+                            ))}
+                          </div>
+                        )}
                         {([
                           ["trends.concept", "trends.copyConcept", tr.concept],
                           ["trends.hook", "trends.copyHook", tr.hook],
