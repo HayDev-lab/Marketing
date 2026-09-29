@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useI18n, api } from "@/lib/use-i18n";
+import { copyTextToClipboard } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import {
   Instagram, Music2, Facebook, Send, Link2, Unlink, CalendarClock, TriangleAlert,
-  Download, RefreshCw, Loader2, CircleAlert, ClipboardCheck, Hand,
+  Download, RefreshCw, Loader2, CircleAlert, ClipboardCheck, Hand, Copy, Check,
   CalendarRange, ChevronLeft, ChevronRight, GripVertical,
 } from "lucide-react";
 import { PlatformIcon } from "@/components/modules/content";
@@ -93,6 +94,8 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
   // per-post actions
   const [attemptResult, setAttemptResult] = useState<AttemptResult | null>(null);
   const [busyPost, setBusyPost] = useState<string | null>(null);
+  // brief check-icon feedback after copying a caption
+  const [copiedPostId, setCopiedPostId] = useState<string | null>(null);
   const [rescheduleId, setRescheduleId] = useState<string | null>(null);
   const [rescheduleValue, setRescheduleValue] = useState("");
 
@@ -214,6 +217,23 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
     }
   };
 
+  // draft-transfer aid: copy the caption without mutating post state (honest workflow)
+  const copyCaption = async (post: ScheduledPost) => {
+    const text = post.caption?.trim() ?? "";
+    if (!text) {
+      toast.info(t("publishing.noCaption"));
+      return;
+    }
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      setCopiedPostId(post.id);
+      toast.success(t("publishing.captionCopied"));
+      setTimeout(() => setCopiedPostId((cur) => (cur === post.id ? null : cur)), 2000);
+    } else {
+      toast.error(t("publishing.err.default"), { description: t("publishing.noCaption") });
+    }
+  };
+
   const reschedule = async (post: ScheduledPost, value: string) => {
     if (!value || isNaN(new Date(value).getTime())) {
       toast.warning(t("publishing.newDateTime"), { description: t("publishing.err.default") });
@@ -301,7 +321,7 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
   };
 
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-5 [&>*]:min-w-0">
       {/* header */}
       <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -329,7 +349,7 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
               const honest = honestResult[p];
               return (
                 <motion.div key={p} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="glass glass-hover flex flex-col gap-3 rounded-2xl p-4">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center gap-2 text-sm font-semibold">
                       <span className="rounded-lg p-1.5" style={{ background: "color-mix(in oklab, var(--neon) 14%, transparent)" }}>
                         <PlatformIcon platform={p} className="h-4 w-4 text-[var(--neon)]" />
@@ -508,7 +528,7 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
 
       {/* scheduled posts */}
       <Card className="glass rounded-2xl">
-        <CardHeader className="flex-row items-center justify-between pb-2">
+        <CardHeader className="flex flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
             <CalendarClock className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> {t("publishing.scheduledPosts")}
           </CardTitle>
@@ -533,7 +553,7 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
                 if (p.preflightJson) { try { preflight = JSON.parse(p.preflightJson); } catch { preflight = null; } }
                 const accent = postStatusAccent(p.status);
                 return (
-                  <li key={p.id} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+                  <li key={p.id} className="rounded-xl border border-border/60 bg-muted/20 p-3 transition hover:border-[var(--neon)]/25 hover:bg-muted/30">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{p.contentItem?.title ?? p.platform}</p>
@@ -568,6 +588,17 @@ export function PublishingModule(_props: { onBrandsChanged?: () => void }) {
                         <>
                           <Button size="sm" variant="outline" className="min-h-11" disabled={busyPost === p.id} onClick={() => { setRescheduleId(p.id); setRescheduleValue(toLocalInput(new Date(p.scheduledAt))); }}>
                             {t("publishing.rescheduleTitle")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="min-h-11"
+                            disabled={busyPost === p.id}
+                            onClick={() => copyCaption(p)}
+                            aria-label={t("publishing.copyCaption")}
+                          >
+                            {copiedPostId === p.id ? <Check className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
+                            {copiedPostId === p.id ? t("publishing.captionCopied") : t("publishing.copyCaption")}
                           </Button>
                           <Button size="sm" variant="outline" className="min-h-11" disabled={busyPost === p.id} onClick={() => cancelPost(p)}>
                             {t("publishing.cancelPost")}

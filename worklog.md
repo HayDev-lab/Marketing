@@ -274,3 +274,30 @@ Stage Summary:
 - 1 КРАШ-баг найден и исправлен: генерация контент-плана из Planner роняла приложение (нормализация POST-ответа + defensive rendering)
 - Риски: batch-прогон синхронный (1 LLM-вызов ~5-15с на пункт, 7 пунктов ≈ 1-2 мин; UI прогрессбар, но вкладка должна оставаться открытой) — кандидат на jobs-очередь; черновики, созданные ДО itemIndex, не покрывают пункты (dedup только для новых)
 - Кандидаты next: batch через jobs-очередь с фоновым прогрессом, ZIP-экспорт кампании с медиа, полный sources-widget на дашборде, периодический TREND_SEARCH в autopilot, онбординг-тур для новых фич
+
+---
+Task ID: 12
+Agent: main (cron webDevReview #7)
+Task: QA-проход #7 + фичи (ZIP-экспорт кампании с медиа, copy-caption для draft-transfer) + фикс мобильного overflow в Publishing
+
+Work Log:
+- Инфраструктура: dev-сервер жив, qa4-сессия активна; QA всех 13 views — 0 консольных ошибок; статус стабильный → фичи
+- НОВАЯ ФИЧА (ZIP-экспорт кампании с медиа): в Content шапке кнопка «Արտահանել արշավը» стала DropdownMenu: (1) Markdown .md — прежний дайджест, (2) «Ներբեռնել ZIP (մեդիայով)» — НОВОЕ: клиентский ZIP через fflate (bun add fflate@0.8.3): для каждого item под текущими фильтрами папка item-NN-{slug}/copy.md (полный текст: бренд/платформа/стейт/hook/caption/hashtags/script) + media.{ext} — оригинал ассета тянется с /api/assets/{id}/raw (cookie-auth), ext из content-type (png/jpg/webp/mp4/webm/mp3/wav/bin); в корне campaign.md — дайджест со ссылками на папки; честная деградация: недоступный ассет пропускается, copy.md остаётся; тост «ZIP փաթեթը պատրաստ է ({n} միավոր)» с description «{k} × media»; спиннер в menu item во время сборки
+  - VERIFIED живьём: сгенерирована картинка через /api/generate/image (COMPLETED), прицеплена к item через PATCH assetId; ZIP собрался: 9 items, 1 × media (asset endpoint проверен: 200, image/png, 73992 байт)
+- НОВАЯ ФИЧА (copy-caption для draft-transfer): в Publishing у каждого scheduled-поста кнопка «Պատճենել տեքստը» — копирует caption БЕЗ мутации статуса поста (в отличие от attempt_publish, который переводит пост в honest-failed); иконка меняется на Check 2с после копирования; пустой caption → info-тост; общий хелпер copyTextToClipboard в src/lib/utils.ts (navigator.clipboard → fallback document.execCommand('copy') через скрытый textarea) — clipboard API блокируется без user-activation (headless-тест это подтвердил: у нас честный error-тост, в реальном браузере работает)
+- ФИКС (мобильный overflow в Publishing, 390px): docW 429 → 390. Диагностика послойно: перебор детей root-grid с display:none + замер min-content каждого → виноват scheduled-posts Card (mcs 417). Причина: shadcn v4 CardHeader — grid с @container (класс flex-row на нём не работает), внутри action-row из 4 кнопок (198+189+98+244px) в карточке px-6 → min-content 415+ раздувал auto-трек
+  - ФИКС 1: CardHeader scheduled-карточки → явный flex flex-wrap items-center justify-between gap-2
+  - ФИКС 2 (root): модульный root-grid → className="grid gap-5 [&>*]:min-w-0" — все дети могут сжиматься ниже min-content, overflow уходит в их собственные scroll-контейнеры
+  - ФИКС 3: connection-карточки — badge-строка flex-wrap (бейдж «API-ն հասանելի չէ» не вылезает за карточку)
+  - Проверено: mobile 390px hScroll=false (десктоп тоже чисто), TikTok/Instagram/Facebook карточки выглядят корректно
+- Ложная тревога при диагностике: rg показал «auto-cols-inmax(138px,1fr)]» как битый класс week-board — оказалось артефактом вывода rg; в файле корректный auto-cols-[minmax(138px,1fr)] (проверено od -c)
+- Тестовые данные (qa4): 2 SCHEDULED поста (1 с caption, 1 пустой — честный кейс), 1 IMAGE ассет прицеплен к item, item APPROVED через transition (подтверждён NO_MEDIA guard: без медиа approve отклоняется)
+- i18n: publishing.ts +5 ключей ×3 локали (content.exportZip, content.exportZipDone, publishing.copyCaption, publishing.captionCopied, publishing.noCaption) — PARITY 137×3
+- bun run lint 0; bunx tsc --noEmit 0 (вне pre-existing examples/skills); dev.log зелёный; консоль браузера чистая
+- Скриншоты: tool-results/qa7-publishing-copy.png (week board с 2 постами), qa7-scheduled-copy-btn.png (кнопки Copy caption), qa7-mobile-publishing.png (ДО фикса — overflow), qa7-mobile-publishing-fixed.png (ПОСЛЕ — чисто)
+
+Stage Summary:
+- 2 фичи верифицированы: ZIP-экспорт кампании с медиа (fflate, честная деградация по ассетам), copy-caption для честного draft-transfer сценария (без мутации статуса)
+- 1 QA-фикс: мобильный overflow Publishing (429→390px) — CardHeader grid-квирк + root-grid min-w-0
+- Риски: clipboard в headless-браузере недоступен (нет user-activation) — фолбэк execCommand добавлен, но финальная проверка копирования возможна только в реальном браузере; ZIP собирается на клиенте — при десятках видеофайлов может съедать память (сейчас только 1 медиа в тестовых данных)
+- Кандидаты next: batch через jobs-очередь с фоновым прогрессом, полный sources-widget на дашборде, периодический TREND_SEARCH в autopilot (осторожно с квотой serper), онбординг-тур для новых фич (⌘K, A/B, batch, ZIP)

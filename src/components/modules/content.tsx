@@ -30,8 +30,9 @@ import {
 import {
   FileStack, Instagram, Music2, Facebook, Send, RefreshCw, Search, History,
   ImageIcon, Film, AudioLines, Trash2, Loader2, ShieldCheck, CircleAlert, CheckCircle2, Globe,
-  Package, Copy, FileDown, FileJson, FlaskConical, Sparkles, Check,
+  Package, Copy, FileDown, FileJson, FlaskConical, Sparkles, Check, FileArchive,
 } from "lucide-react";
+import { zipSync, type Zippable } from "fflate";
 
 // ===== types =====
 export type ApprovalState =
@@ -173,6 +174,35 @@ function safeFileStem(s: string): string {
   return (s || "content").toLowerCase().replace(/[^a-z0-9\u0561-\u0587\u0430-\u044f]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "content";
 }
 
+// per-item markdown (shared by campaign digest and ZIP copy.md)
+function itemMarkdown(it: ContentItem, brandName: string): string {
+  const lines: string[] = [
+    `# ${it.title}`,
+    "",
+    `- **Brand:** ${brandName || "—"}`,
+    `- **Platform:** ${it.platform} · **Type:** ${it.contentType} · **Lang:** ${it.language}`,
+    `- **State:** ${it.approvalState} · v${it.contentVersion} · ${new Date(it.updatedAt).toISOString()}`,
+    "",
+  ];
+  if (it.hook) lines.push(`**Hook:** ${it.hook}`, "");
+  if (it.caption) lines.push("**Caption:**", "", it.caption, "");
+  if (it.hashtags) lines.push(`**Hashtags:** ${it.hashtags}`, "");
+  if (it.script) lines.push("**Script:**", "", it.script, "");
+  return lines.join("\n");
+}
+
+function extFromMime(mime: string): string {
+  if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
+  if (mime.includes("gif")) return "gif";
+  if (mime.includes("jpeg") || mime.includes("jpg")) return "jpg";
+  if (mime.includes("mp4") || mime.includes("video")) return "mp4";
+  if (mime.includes("webm")) return "webm";
+  if (mime.includes("mpeg") || mime.includes("mp3") || mime.includes("audio")) return "mp3";
+  if (mime.includes("wav")) return "wav";
+  return "bin";
+}
+
 // ===== main module =====
 export function ContentModule(_props: { onBrandsChanged?: () => void }) {
   const { t } = useI18n();
@@ -200,6 +230,8 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
   const [variants, setVariants] = useState<VariantCopy[] | null>(null);
   const [variantsLoading, setVariantsLoading] = useState(false);
   const [appliedVariant, setAppliedVariant] = useState<string | null>(null);
+  // ZIP export progress
+  const [zipping, setZipping] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -384,24 +416,75 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
       "",
     ];
     filtered.forEach((it, i) => {
-      lines.push(
-        "---",
-        "",
-        `## ${i + 1}. ${it.title}`,
-        "",
-        `- **Brand:** ${brandNameOf(it.brandId)}`,
-        `- **Platform:** ${it.platform} · **Type:** ${it.contentType} · **Lang:** ${it.language}`,
-        `- **State:** ${it.approvalState} · v${it.contentVersion} · ${new Date(it.updatedAt).toISOString()}`,
-        "",
-      );
-      if (it.hook) lines.push(`**Hook:** ${it.hook}`, "");
-      if (it.caption) lines.push("**Caption:**", "", it.caption, "");
-      if (it.hashtags) lines.push(`**Hashtags:** ${it.hashtags}`, "");
-      if (it.script) lines.push("**Script:**", "", it.script, "");
+      lines.push("---", "", `## ${i + 1}. ${it.title}`, "", itemMarkdown(it, brandNameOf(it.brandId)));
     });
     lines.push("---", "", `Exported from ՀայDev Marketing — ${new Date().toISOString()}`);
     downloadText(`campaign-${stateFilter ?? "all"}-${filtered.length}.md`, lines.join("\n"), "text/markdown");
     toast.success(t("content.exportCampaignDone", { n: filtered.length }));
+  };
+
+  // ZIP export: per-item folder (copy.md + original media) + campaign.md digest at root
+  const exportCampaignZip = async () => {
+    if (filtered.length === 0) {
+      toast.info(t("content.exportCampaignEmpty"));
+      return;
+    }
+    setZipping(true);
+    try {
+      const brandNameOf = (id: string) => brands.find((b) => b.id === id)?.name ?? "—";
+      const files: Zippable = {};
+      const digest: string[] = [
+        `# HayDev — ${t("content.exportCampaign")}`,
+        "",
+        `- **Date:** ${new Date().toISOString()}`,
+        `- **Items:** ${filtered.length}`,
+        `- **Brand:** ${brandFilter === "all" ? "all" : brandNameOf(brandFilter)}`,
+        `- **State:** ${stateFilter ?? "all"}`,
+        "",
+      ];
+      const encoder = new TextEncoder();
+      const used = new Set<string>();
+      let mediaCount = 0;
+      for (let i = 0; i < filtered.length; i++) {
+        const it = filtered[i];
+        const folder = `item-${String(i + 1).padStart(2, "0")}-${safeFileStem(it.title)}`.replace(/-x+$/, "");
+        const unique = used.has(folder) ? `${folder}-${it.id.slice(-4)}` : folder;
+        used.add(unique);
+        files[`${unique}/copy.md`] = encoder.encode(itemMarkdown(it, brandNameOf(it.brandId)));
+        digest.push("---", "", `## ${i + 1}. ${it.title}`, "", `- **Folder:** ${unique}/`, "");
+        if (it.assetId) {
+          try {
+            const res = await fetch(`/api/assets/${it.assetId}/raw`);
+            if (res.ok) {
+              const mime = res.headers.get("content-type") ?? "";
+              const buf = new Uint8Array(await res.arrayBuffer());
+              files[`${unique}/media.${extFromMime(mime)}`] = buf;
+              mediaCount += 1;
+              digest.push(`- **Media:** media.${extFromMime(mime)}`, "");
+            }
+          } catch {
+            // honest: media skipped, copy.md still included
+          }
+        }
+      }
+      digest.push("---", "", `Exported from ՀայDev Marketing — ${new Date().toISOString()}`);
+      files["campaign.md"] = encoder.encode(digest.join("\n"));
+      const zipped = zipSync(files, { level: 6 });
+      const blob = new Blob([zipped as BlobPart], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `haydev-campaign-${filtered.length}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      toast.success(t("content.exportZipDone", { n: filtered.length }), { description: mediaCount > 0 ? `${mediaCount} × media` : undefined });
+    } catch (e) {
+      toast.error(t("content.err.default"), { description: (e as Error).message });
+    } finally {
+      setZipping(false);
+    }
   };
 
   return (
@@ -416,16 +499,32 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
             <p className="mt-1 text-sm text-muted-foreground">{t("content.subtitle")}</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-11 gap-1.5"
-              onClick={exportCampaign}
-              disabled={filtered.length === 0}
-              aria-label={t("content.exportCampaign")}
-            >
-              <Package className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> {t("content.exportCampaign")}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 gap-1.5"
+                  disabled={filtered.length === 0}
+                  aria-label={t("content.exportCampaign")}
+                >
+                  <Package className="h-4 w-4 text-[var(--neon-2)]" aria-hidden /> {t("content.exportCampaign")}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  {t("content.exportCampaignDone", { n: filtered.length })}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={exportCampaign}>
+                  <FileDown className="mr-2 h-4 w-4" aria-hidden /> {t("content.exportMd")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={exportCampaignZip} disabled={zipping}>
+                  {zipping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <FileArchive className="mr-2 h-4 w-4 text-[var(--neon-2)]" aria-hidden />}
+                  {t("content.exportZip")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button variant="outline" size="sm" onClick={load} aria-label={t("content.refresh")} className="min-h-11">
               <RefreshCw className="h-4 w-4" aria-hidden />
             </Button>
