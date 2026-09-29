@@ -39,6 +39,7 @@ interface Costs {
   today: number;
   week: number;
   month: number;
+  daily14?: { date: string; cost: number }[];
   byProvider: { provider: string; cost: number }[];
 }
 interface DashData {
@@ -62,6 +63,14 @@ const QUICK = [
   { view: "voice" as const, icon: UserSquare, key: "dash.qa.avatar", neon: "--neon-3" },
   { view: "publishing" as const, icon: Send, key: "dash.qa.schedule", neon: "--neon-2" },
 ];
+
+// sparkline bar class by spend level (zero → faint, spend → neon gradient)
+function cnSpark(cost: number): string {
+  if (cost <= 0) return "min-h-[2px] flex-1 rounded-t-sm bg-muted/50";
+  if (cost < 0.05) return "min-h-[2px] flex-1 rounded-t-sm bg-[var(--neon)]/45";
+  if (cost < 0.2) return "min-h-[2px] flex-1 rounded-t-sm bg-[var(--neon)] shadow-[0_0_6px_var(--neon)]";
+  return "min-h-[2px] flex-1 rounded-t-sm bg-gradient-to-t from-[var(--neon-3)] to-[var(--neon)] shadow-[0_0_8px_var(--neon)]";
+}
 
 export function DashboardModule() {
   const { t } = useI18n();
@@ -200,6 +209,30 @@ export function DashboardModule() {
                   </div>
                   <Progress value={Math.min(100, data.costs.month)} className="h-1.5" />
                 </div>
+                {data.costs.daily14 && data.costs.daily14.some((d) => d.cost > 0) && (
+                  <div className="mt-1" role="img" aria-label={t("dash.costTrend")}>
+                    <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span>{t("dash.costTrend")}</span>
+                      <span className="font-mono">14d</span>
+                    </div>
+                    <div className="flex h-12 items-end gap-[3px]">
+                      {(() => {
+                        const series = data.costs.daily14 ?? [];
+                        const max = Math.max(...series.map((d) => d.cost), 0.0001);
+                        return series.map((d, i) => (
+                          <motion.span
+                            key={d.date}
+                            title={`${d.date}: $${d.cost.toFixed(3)}`}
+                            initial={{ height: 2, opacity: 0 }}
+                            animate={{ height: `${Math.max(6, (d.cost / max) * 100)}%`, opacity: 1 }}
+                            transition={{ delay: i * 0.03, duration: 0.4, ease: "easeOut" }}
+                            className={cnSpark(d.cost)}
+                          />
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                )}
                 <p className="text-[11px] text-muted-foreground">
                   Hard limits enforced by Autopilot policy · {data.costs.byProvider.length} providers tracked
                 </p>

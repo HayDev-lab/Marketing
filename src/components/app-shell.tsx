@@ -23,9 +23,10 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   LayoutDashboard, Building2, Flame, CalendarRange, FileStack, Library,
-  ImageIcon, Clapperboard, AudioLines, Send, BarChart3, Settings, Plug, LogOut, Menu, X,
+  ImageIcon, Clapperboard, AudioLines, Send, BarChart3, Settings, Plug, LogOut, Menu, X, Search,
 } from "lucide-react";
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
+import { CommandPalette, openCommandPalette } from "@/components/command-palette";
 import { cn } from "@/lib/utils";
 
 const NAV: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key: string }[] = [
@@ -126,6 +127,15 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
             ))}
           </div>
 
+          <button
+            onClick={openCommandPalette}
+            className="hidden h-9 items-center gap-2 rounded-full glass px-3 text-xs text-muted-foreground transition-colors hover:text-foreground md:inline-flex"
+            aria-label="Open command palette"
+          >
+            <Search className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />
+            <span className="hidden lg:inline">{t("cmd.title")}</span>
+            <kbd className="rounded border border-border/80 bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">⌘K</kbd>
+          </button>
           <div className="hidden items-center gap-2 md:flex">
             <Select value={activeBrandId ?? ""} onValueChange={setActiveBrand}>
               <SelectTrigger className="h-9 w-[170px] text-xs" aria-label="Active brand">
@@ -215,6 +225,9 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
           </span>
         </div>
       </footer>
+
+      {/* Global command palette (⌘K / Ctrl+K, G-to-jump) */}
+      <CommandPalette />
     </div>
   );
 }

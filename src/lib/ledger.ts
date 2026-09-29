@@ -46,19 +46,37 @@ export const ledger = {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfWeek = new Date(startOfDay.getTime() - ((now.getDay() + 6) % 7) * 24 * 3600 * 1000);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const [today, week, month, byProvider, byCapability, total] = await Promise.all([
+    const start14 = new Date(startOfDay.getTime() - 13 * 24 * 3600 * 1000);
+    const [today, week, month, byProvider, byCapability, total, recent] = await Promise.all([
       db.costLedger.aggregate({ _sum: { estimatedCost: true }, where: { userId, createdAt: { gte: startOfDay } } }),
       db.costLedger.aggregate({ _sum: { estimatedCost: true }, where: { userId, createdAt: { gte: startOfWeek } } }),
       db.costLedger.aggregate({ _sum: { estimatedCost: true }, where: { userId, createdAt: { gte: startOfMonth } } }),
       db.costLedger.groupBy({ by: ["provider"], _sum: { estimatedCost: true }, where: { userId } }),
       db.costLedger.groupBy({ by: ["capability"], _sum: { estimatedCost: true }, where: { userId } }),
       db.costLedger.aggregate({ _sum: { estimatedCost: true }, where: { userId } }),
+      db.costLedger.findMany({
+        where: { userId, createdAt: { gte: start14 } },
+        select: { estimatedCost: true, createdAt: true },
+      }),
     ]);
+    // 14-day daily series (UTC-day buckets, oldest → newest) for the dashboard sparkline
+    const daily14: { date: string; cost: number }[] = [];
+    const dayMap = new Map<string, number>();
+    for (const row of recent) {
+      const key = row.createdAt.toISOString().slice(0, 10);
+      dayMap.set(key, (dayMap.get(key) ?? 0) + (row.estimatedCost ?? 0));
+    }
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(startOfDay.getTime() - i * 24 * 3600 * 1000);
+      const key = d.toISOString().slice(0, 10);
+      daily14.push({ date: key, cost: Math.round((dayMap.get(key) ?? 0) * 10000) / 10000 });
+    }
     return {
       today: today._sum.estimatedCost ?? 0,
       week: week._sum.estimatedCost ?? 0,
       month: month._sum.estimatedCost ?? 0,
       total: total._sum.estimatedCost ?? 0,
+      daily14,
       byProvider: byProvider.map((r) => ({ provider: r.provider, cost: r._sum.estimatedCost ?? 0 })),
       byCapability: byCapability.map((r) => ({ capability: r.capability, cost: r._sum.estimatedCost ?? 0 })),
     };

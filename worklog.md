@@ -100,3 +100,25 @@ Work Log:
 Stage Summary:
 - Полное приложение собрано: 13 модулей, все API маршруты, i18n 3 языка
 - Следующий шаг: agent-browser E2E верификация golden flow (register → dashboard → brand → analyze → trends → image → content → schedule)
+
+---
+Task ID: 5
+Agent: main
+Task: E2E-верификация через agent-browser, фикс бага синка бренда, новые фичи (Command Palette, cost sparkline)
+
+Work Log:
+- E2E-верификация всех 13 модулей через agent-browser (register/session → dashboard → brands → trends → planner → content → prompt library → image studio → video studio → publishing → analytics → settings → mcp)
+- Image Studio golden path подтверждён: POST /api/generate/image 200 in 84s, результат отрисован (provider zai-image, model image-gen-v2, download, recent gallery)
+- Мобильная верификация (390×844): hamburger sheet-меню, одноколоночная сетка, sticky footer — OK
+- Консоль браузера чистая (0 ошибок); "2 Issues" в Next.js DevTools — старые транзиентные 502 TTS из ранних сессий (TTS response_format баг уже был исправлен ранее — err 1214)
+- БАГ: в Trends селектор бренда показывал "No brand (generic)" при установленном activeBrandId. Глубокая диагностика через React fiber инспекцию (hooks dump, effect deps, Radix bubble input): useEffect-синк не успевал отработать при монтировании (тайминги zustand persist гидрации). ФИКС: эффект заменён на производное состояние `brandId = pickedBrandId ?? activeBrandId ?? "none"` (эффект-фри синк, явный выбор пользователя приоритетен) — trends.tsx
+- ФИКС page.tsx: bootstrap useCallback зависел от activeBrandId → повторный /api/auth/me при каждой смене бренда; теперь читает useApp.getState() внутри — bootstrap стабилен
+- НОВАЯ ФИЧА: Command Palette (⌘K/Ctrl+K) — command-palette.tsx на shadcn CommandDialog: навигация по 13 модулям с иконками + G→<letter> hotkeys (G D, G B, G T...), переключение Manual/Autopilot, смена языка HY/RU/EN с пометкой текущего, i18n ключи cmd.* ×3 локали, кнопка-триггер в топбаре с ⌘K kbd
+- НОВАЯ ФИЧА: 14-дневный спарклайн расходов на Dashboard Budget карточке — ledger.ts usage() расширен daily14 рядом (UTC-дневные бакеты), неоновые бары с градиентом по уровню трат, motion-анимация появления, title-тултипы, i18n dash.costTrend ×3
+- Проверено: bun run lint 0 ошибок, tsc --noEmit 0 ошибок (вне pre-existing examples/skills), Ctrl+K/G-hotkeys/смена языка/навигация/спарклайн верифицированы в браузере, dev.log компилится зелёным
+- Тестовый бренд "Test Brand B" (создан для диагностики) удалён
+
+Stage Summary:
+- Приложение полностью функционально и верифицировано E2E; багфикс синка бренда надёжнее прежней реализации (не зависит от таймингов эффектов)
+- Новые фичи: Command Palette (power-user навигация) + cost sparkline (аналитика расходов)
+- Следующие кандидаты: календарная неделя для scheduled posts в Publishing, PWA manifest, onboarding-тур для новых пользователей, экспорт контент-пакета (ZIP), дедупликация бренд-фактов
