@@ -145,6 +145,10 @@ export const core: Record<Locale, Dict> = {
     "tour.s6.text": "Եթե ինտեգրացիան դեռ չի աշխատում՝ համակարգը դա ձեզ կասի, և տվյալները երբեք կեղծ չեն լինի։",
     "tour.s7.title": "Ամեն ինչ պատրաստ է",
     "tour.s7.text": "Սկսեք բրենդ ստեղծելուց, և AI-ն կվերլուծի բիզնեսը մի քանի վայրկյանում։",
+    "tour.s8.title": "Աղբյուրների ռադար",
+    "tour.s8.text": "Այստեղ են հավաքվում արտաքին աղբյուրները, որոնց հիման վրա հայտնաբերված են թրենդները՝ վավերացված ապացույցներով և չափանիշներով։",
+    "tour.s9.title": "Ինչով է հարուստ համակարգը",
+    "tour.s9.text": "Content-ում՝ A/B տարբերակներ և ZIP արտահանում, Planner-ում՝ ֆոնային զանգվածային գեներացիա, Analytics-ում՝ CSV արտահանում։ Փորձեք ամեն ինչ։",
   },
   ru: {
     "app.name": "ՀայDev Marketing",
@@ -288,6 +292,10 @@ export const core: Record<Locale, Dict> = {
     "tour.s6.text": "Если интеграция ещё не работает, система скажет об этом прямо и никогда не подделает данные.",
     "tour.s7.title": "Всё готово",
     "tour.s7.text": "Начните с создания бренда — AI проанализирует бизнес за считанные секунды.",
+    "tour.s8.title": "Радар источников",
+    "tour.s8.text": "Здесь собраны внешние источники, стоящие за обнаруженными трендами, — с проверенными цитатами и наблюдаемыми метриками.",
+    "tour.s9.title": "Что внутри",
+    "tour.s9.text": "В Content — A/B-варианты и ZIP-экспорт, в Planner — фоновая массовая генерация, в Analytics — экспорт CSV. Попробуйте всё.",
   },
   en: {
     "app.name": "ՀայDev Marketing",
@@ -431,5 +439,9 @@ export const core: Record<Locale, Dict> = {
     "tour.s6.text": "If an integration isn't live yet, the system says so — and never fakes your data.",
     "tour.s7.title": "You're all set",
     "tour.s7.text": "Start by creating a brand — AI will analyze the business in seconds.",
+    "tour.s8.title": "Signal sources radar",
+    "tour.s8.text": "External sources behind your discovered trends live here — with verified quotes and observed metrics.",
+    "tour.s9.title": "What's inside",
+    "tour.s9.text": "A/B variants and ZIP export in Content, background batch generation in Planner, CSV export in Analytics. Try everything.",
   },
 };

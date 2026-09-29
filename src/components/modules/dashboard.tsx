@@ -472,7 +472,7 @@ export function DashboardModule() {
       </div>
 
       {/* signal sources — durable aggregation of the external evidence behind all trend signals */}
-      <section aria-label={t("dash.sources")}>
+      <section aria-label={t("dash.sources")} data-tour="sources">
         <h2 className="heading-accent mb-3 text-sm font-medium tracking-wide text-muted-foreground">
           {t("dash.sources")} · {signalsWithSource}/{data?.allTrends.length ?? 0}
         </h2>

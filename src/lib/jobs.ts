@@ -15,6 +15,7 @@ export type JobKind =
   | "ANALYZE_SITE"
   | "TREND_SEARCH"
   | "PLAN"
+  | "CONTENT_BATCH"
   | "AUTOPILOT_CYCLE";
 
 export interface CreateJobInput {
@@ -27,6 +28,7 @@ export interface CreateJobInput {
   brandId?: string;
   estimatedCost?: number;
   maxAttempts?: number;
+  checkpointJson?: Record<string, unknown>;
 }
 
 function hashInput(obj: unknown): string {
@@ -52,6 +54,7 @@ export const jobs = {
         inputHash,
         idempotencyKey: input.idempotencyKey,
         maxAttempts: input.maxAttempts ?? 3,
+        ...(input.checkpointJson ? { checkpointJson: JSON.stringify(input.checkpointJson) } : {}),
       },
     });
     if (input.estimatedCost && input.estimatedCost > 0) {

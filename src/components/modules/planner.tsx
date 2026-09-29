@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useApp, pulseCore } from "@/lib/store";
@@ -69,6 +69,9 @@ interface FunnelStage { stage: string; content_types: string[] }
 interface WeeklyRow { day: string; platform: string; pillar: string; format: string; topic: string }
 interface Kpi { name: string; target: string }
 interface Campaign { name: string; concept: string; platform: string }
+// durable background batch job (client-side view of GenerationJob kind=CONTENT_BATCH)
+interface BatchRun { jobId: string; planId: string; done: number; total: number }
+interface JobDto { id: string; kind: string; status: string; inputJson: string | null; outputJson: string | null; checkpointJson: string | null; createdAt: string }
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
@@ -213,14 +216,39 @@ export function PlannerModule() {
   const [approving, setApproving] = useState(false);
   const [creatingItem, setCreatingItem] = useState<string | null>(null);
   const [createdItems, setCreatedItems] = useState<Record<string, boolean>>({});
-  // batch AI drafting: one plan card at a time, sequential per-item calls with progress + cancel
-  const [batch, setBatch] = useState<{ planId: string; done: number; total: number } | null>(null);
-  const batchStopRef = useRef(false);
+  // batch AI drafting: durable background job (GenerationJob, kind CONTENT_BATCH) —
+  // progress is checkpointed server-side, so a reload never loses the run; resumable chip
+  const [batch, setBatch] = useState<BatchRun | null>(null);
+  const [resumable, setResumable] = useState<Record<string, BatchRun>>({});
 
   useEffect(() => {
     api<BrandLite[]>("/api/brands")
       .then(setBrands)
       .catch(() => {});
+  }, []);
+
+  // detect in-flight background batch jobs: progress survives reload, chip offers resume
+  const refreshResumable = useCallback(async () => {
+    try {
+      const jobList = await api<JobDto[]>("/api/jobs?limit=30");
+      const inflight: Record<string, BatchRun> = {};
+      for (const j of jobList) {
+        if (j.kind !== "CONTENT_BATCH") continue;
+        if (!["QUEUED", "PROCESSING", "RETRYING"].includes(j.status)) continue;
+        const inp = parseJson<{ planId?: string; indexes?: number[] }>(j.inputJson, {});
+        const out = parseJson<{ done?: number }>(j.outputJson, {});
+        if (!inp.planId) continue;
+        inflight[inp.planId] = {
+          jobId: j.id,
+          planId: inp.planId,
+          done: typeof out.done === "number" ? out.done : 0,
+          total: Array.isArray(inp.indexes) ? inp.indexes.length : 0,
+        };
+      }
+      setResumable(inflight);
+    } catch {
+      setResumable({}); // honest: chip simply not shown when the job feed is unreachable
+    }
   }, []);
 
   const loadPlans = useCallback(async (brandId: string) => {
@@ -232,12 +260,13 @@ export function PlannerModule() {
       ]);
       setPlan(marketing[0] ?? null);
       setContentPlans(content);
+      await refreshResumable();
     } catch (e) {
       toast.error(errMessage(e));
     } finally {
       setPlansLoading(false);
     }
-  }, []);
+  }, [refreshResumable]);
 
   useEffect(() => {
     if (activeBrandId) loadPlans(activeBrandId);
@@ -378,8 +407,46 @@ export function PlannerModule() {
     return covered;
   }, [createdItems]);
 
-  // batch generate: AI drafts for every plan item that does not have one yet
-  const generateAllFromPlan = async (cp: ContentPlanDto) => {
+  // ---- durable background batch (GenerationJob kind=CONTENT_BATCH) ----
+  // step loop: each POST processes exactly ONE item server-side (~one LLM call) and
+  // checkpoints progress in the job row — terminal status ends the loop
+  const runBatchSteps = useCallback(async (run: BatchRun) => {
+    try {
+      for (;;) {
+        const st = await api<{ status: string; done: number; total: number }>(
+          `/api/plans/content/batch-jobs/${run.jobId}/step`,
+          { method: "POST" }
+        );
+        setBatch((prev) => (prev && prev.jobId === run.jobId ? { ...prev, done: st.done, total: st.total || prev.total } : prev));
+        if (st.status !== "PROCESSING") {
+          if (st.status === "COMPLETED") toast.success(t("planner.batchDone", { n: st.done }));
+          else if (st.status === "CANCELLED") {
+            if (st.done > 0) toast.info(t("planner.batchPartial", { n: st.done }));
+            else toast.info(t("planner.batchStopped"));
+          } else {
+            toast.error(t("planner.batchFailed"), { description: t("planner.batchInterrupted") });
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      // network/provider failure mid-loop — the job stays in the DB; the chip lets the user resume
+      toast.error(errMessage(e), { description: t("planner.batchInterrupted") });
+    } finally {
+      setBatch((prev) => (prev && prev.jobId === run.jobId ? null : prev));
+      if (activeBrandId) {
+        try {
+          const content = await api<ContentPlanDto[]>(`/api/plans/content?brandId=${activeBrandId}`);
+          setContentPlans(content);
+        } catch {
+          /* keep the current list — refresh is best-effort */
+        }
+      }
+      refreshResumable();
+    }
+  }, [activeBrandId, refreshResumable, t]);
+
+  const startBatchJob = async (cp: ContentPlanDto) => {
     if (batch) return;
     const covered = coveredIndexes(cp);
     const remaining = cp.itemsJson ? parseJson<PlanItem[]>(cp.itemsJson, []).map((_, i) => i).filter((i) => !covered.has(i)) : [];
@@ -387,36 +454,36 @@ export function PlannerModule() {
       toast.info(t("planner.batchNone"));
       return;
     }
-    batchStopRef.current = false;
-    setBatch({ planId: cp.id, done: 0, total: remaining.length });
-    let okCount = 0;
     try {
-      for (const idx of remaining) {
-        if (batchStopRef.current) break;
-        try {
-          const res = await api<{ created: unknown[] }>("/api/plans/content/batch", {
-            method: "POST",
-            body: JSON.stringify({ id: cp.id, indexes: [idx], aiWrite: true }),
-          });
-          okCount += res.created.length;
-        } catch (e) {
-          toast.error(errMessage(e), { description: `#${idx + 1}` });
-        }
-        setBatch((prev) => (prev && prev.planId === cp.id ? { ...prev, done: prev.done + 1 } : prev));
-      }
-    } finally {
-      const stopped = batchStopRef.current;
+      const res = await api<{ job: { id: string } }>("/api/plans/content/batch-jobs", {
+        method: "POST",
+        body: JSON.stringify({ planId: cp.id, indexes: remaining, language: locale }),
+      });
+      const run: BatchRun = { jobId: res.job.id, planId: cp.id, done: 0, total: remaining.length };
+      setBatch(run);
+      setResumable((prev) => ({ ...prev, [cp.id]: run })); // visible before the first step returns
+      await runBatchSteps(run);
+    } catch (e) {
+      toast.error(errMessage(e));
       setBatch(null);
-      batchStopRef.current = false;
-      if (okCount > 0) {
-        toast.success(stopped ? t("planner.batchPartial", { n: okCount }) : t("planner.batchDone", { n: okCount }));
-      } else if (stopped) {
-        toast.info(t("planner.batchStopped"));
-      }
-      if (activeBrandId) {
-        const content = await api<ContentPlanDto[]>(`/api/plans/content?brandId=${activeBrandId}`);
-        setContentPlans(content);
-      }
+      refreshResumable();
+    }
+  };
+
+  const resumeBatch = async (run: BatchRun) => {
+    if (batch) return;
+    setBatch(run);
+    await runBatchSteps(run);
+  };
+
+  // cancel via the generic jobs API — the running step finishes its item, remaining ones stop
+  const cancelBatch = async () => {
+    const run = batch;
+    if (!run) return;
+    try {
+      await api(`/api/jobs/${run.jobId}`, { method: "POST", body: JSON.stringify({ action: "cancel" }) });
+    } catch {
+      /* the next step call surfaces the terminal state honestly */
     }
   };
 
@@ -585,28 +652,52 @@ export function PlannerModule() {
               <span>·</span>
               <span className={coverage === 100 && items.length > 0 ? "font-medium text-[var(--neon-2)]" : ""}>{cp.contentItems?.length ?? 0} {t("planner.drafts")}</span>
               {items.length > 0 && (
-                <Button
-                  size="sm"
-                  variant={remaining.length === 0 ? "ghost" : "outline"}
-                  className="h-9 gap-1.5"
-                  disabled={batchBusy || remaining.length === 0}
-                  onClick={() => generateAllFromPlan(cp)}
-                  aria-label={t("planner.batchAll", { n: remaining.length })}
-                >
-                  {batchActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Sparkles className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />}
-                  {remaining.length === 0 ? t("planner.batchComplete") : t("planner.batchAll", { n: remaining.length })}
-                </Button>
-              )}
-              {batchActive && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-9 gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10"
-                  onClick={() => { batchStopRef.current = true; }}
-                  aria-label={t("planner.batchStop")}
-                >
-                  <Square className="h-3 w-3" aria-hidden /> {t("planner.batchStop")}
-                </Button>
+                <>
+                  {batchActive ? (
+                    <>
+                      <Button size="sm" variant="outline" className="h-9 gap-1.5" disabled aria-label={t("planner.batchAll", { n: remaining.length })}>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                        {t("planner.batchAll", { n: remaining.length })}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-9 gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10"
+                        onClick={cancelBatch}
+                        aria-label={t("planner.batchStop")}
+                      >
+                        <Square className="h-3 w-3" aria-hidden /> {t("planner.batchStop")}
+                      </Button>
+                    </>
+                  ) : resumable[cp.id] ? (
+                    // durable job still in flight — resume instead of starting a duplicate
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-9 gap-1.5 border-[var(--neon)]/60 text-[var(--neon)] hover:bg-[var(--neon)]/10"
+                      onClick={() => resumeBatch(resumable[cp.id])}
+                      aria-label={t("planner.batchResume", { done: resumable[cp.id].done, total: resumable[cp.id].total })}
+                    >
+                      <span className="relative flex h-2 w-2" aria-hidden>
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--neon)] opacity-60" />
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--neon)]" />
+                      </span>
+                      {t("planner.batchResume", { done: resumable[cp.id].done, total: resumable[cp.id].total })}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant={remaining.length === 0 ? "ghost" : "outline"}
+                      className="h-9 gap-1.5"
+                      disabled={batchBusy || remaining.length === 0}
+                      onClick={() => startBatchJob(cp)}
+                      aria-label={t("planner.batchAll", { n: remaining.length })}
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />
+                      {remaining.length === 0 ? t("planner.batchComplete") : t("planner.batchAll", { n: remaining.length })}
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </CardHeader>
@@ -618,6 +709,17 @@ export function PlannerModule() {
                   <span className="font-mono">{items.length - remaining.length}/{items.length}{batchActive ? ` · ${batch!.done}/${batch!.total}` : ""}</span>
                 </div>
                 <Progress value={batchActive ? (batch!.done / Math.max(1, batch!.total)) * 100 : coverage} className="h-1.5" />
+                {/* segmented per-item progress during a background run */}
+                {batchActive && (
+                  <div className="flex flex-wrap gap-1" aria-hidden>
+                    {Array.from({ length: batch!.total }, (_, i) => (
+                      <span
+                        key={i}
+                        className={`h-1.5 w-4 rounded-full transition-all ${i < batch!.done ? "bg-[var(--neon)] shadow-[0_0_6px_var(--neon)]" : "bg-muted"}`}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {items.length === 0 ? (

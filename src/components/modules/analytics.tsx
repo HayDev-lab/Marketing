@@ -16,7 +16,7 @@ import {
 import {
   TrendingUp, Eye, Heart, MessageSquare, Share2, Bookmark, MousePointerClick,
   PenLine, Sparkles, Database, BrainCircuit, Loader2, RefreshCw, BarChart3,
-  Workflow, Layers, CalendarCheck2,
+  Workflow, Layers, CalendarCheck2, Download,
 } from "lucide-react";
 import { PlatformIcon } from "@/components/modules/content";
 
@@ -94,6 +94,21 @@ function postStatusLabel(t: (k: string) => string, key: string): string {
   }
 }
 
+function csvEscape(v: string | number): string {
+  const s = String(v);
+  return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadText(filename: string, text: string, mime: string) {
+  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ===== main module =====
 export function AnalyticsModule(_props: { onBrandsChanged?: () => void }) {
   const { t } = useI18n();
@@ -152,6 +167,33 @@ export function AnalyticsModule(_props: { onBrandsChanged?: () => void }) {
     ? ((totals.likes + totals.comments + totals.shares + totals.saves) / totals.views) * 100
     : 0;
 
+  // CSV export of the pipeline overview — every row comes from the same real
+  // records the UI shows (funnel, publishing statuses, mix, metrics, per-post)
+  const exportCsv = () => {
+    if (!overview || (overview.totalItems === 0 && overview.totalPosts === 0 && perPost.length === 0)) {
+      toast.info(t("analytics.exportCsvEmpty"));
+      return;
+    }
+    const rows: (string | number)[][] = [];
+    rows.push(["section", "key", "value"]);
+    for (const f of overview.funnel) rows.push(["funnel", f.state, f.count]);
+    for (const p of overview.postStatuses) rows.push(["post_status", p.key, p.count]);
+    for (const p of overview.platforms) rows.push(["platform", p.key, p.count]);
+    for (const l of overview.languages) rows.push(["language", l.key, l.count]);
+    for (const f of METRIC_FIELDS) rows.push(["metric", f, totals[f]]);
+    rows.push(["metric", "snapshots", overview.metrics.snapshots]);
+    rows.push(["metric", "posts_tracked", overview.metrics.postsTracked]);
+    rows.push(["metric", "engagement_rate_pct", engagementRate.toFixed(2)]);
+    if (perPost.length > 0) {
+      rows.push([]);
+      rows.push(["post", "platform", "views", "engagement"]);
+      for (const p of perPost) rows.push([p.title, p.platform, p.views, p.engagement]);
+    }
+    const csv = rows.map((r) => (r.length ? r.map(csvEscape).join(",") : "")).join("\n");
+    downloadText(`haydev-analytics-${new Date().toISOString().slice(0, 10)}.csv`, csv, "text/csv");
+    toast.success(t("analytics.exportCsvDone", { n: rows.length }));
+  };
+
   const saveEntry = async () => {
     if (!entryId) return;
     setSaving(true);
@@ -180,9 +222,15 @@ export function AnalyticsModule(_props: { onBrandsChanged?: () => void }) {
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">{t("analytics.subtitle")}</p>
           </div>
-          <Button variant="outline" size="sm" className="min-h-11" onClick={load} aria-label={t("content.refresh")}>
-            <RefreshCw className="h-4 w-4" aria-hidden />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="min-h-11 gap-1.5" onClick={exportCsv} aria-label={t("analytics.exportCsv")}>
+              <Download className="h-4 w-4 text-[var(--neon-2)]" aria-hidden />
+              <span className="hidden sm:inline">{t("analytics.exportCsv")}</span>
+            </Button>
+            <Button variant="outline" size="sm" className="min-h-11" onClick={load} aria-label={t("content.refresh")}>
+              <RefreshCw className="h-4 w-4" aria-hidden />
+            </Button>
+          </div>
         </div>
       </motion.section>
 

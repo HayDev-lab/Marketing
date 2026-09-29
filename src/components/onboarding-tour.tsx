@@ -22,7 +22,9 @@ const STEPS: Step[] = [
   { target: '[data-tour="brand"]', titleKey: "tour.s3.title", textKey: "tour.s3.text" },
   { target: '[data-tour="mode"]', titleKey: "tour.s4.title", textKey: "tour.s4.text" },
   { target: '[data-tour="palette"]', titleKey: "tour.s5.title", textKey: "tour.s5.text" },
+  { target: '[data-tour="sources"]', titleKey: "tour.s8.title", textKey: "tour.s8.text" },
   { target: null, titleKey: "tour.s6.title", textKey: "tour.s6.text" },
+  { target: null, titleKey: "tour.s9.title", textKey: "tour.s9.text" },
   { target: null, titleKey: "tour.s7.title", textKey: "tour.s7.text" },
 ];
 
@@ -83,7 +85,22 @@ export function OnboardingTour() {
     if (!open) return;
     const measure = () => {
       const s = STEPS[step];
-      setRect(s.target ? visibleRect(s.target) : null);
+      if (!s.target) {
+        setRect(null);
+        return;
+      }
+      const el = document.querySelector(s.target);
+      if (!el) {
+        setRect(null);
+        return;
+      }
+      // target exists but is scrolled out of view → bring it in; the scroll
+      // listener below re-measures once the smooth scroll settles
+      const r = el.getBoundingClientRect();
+      if (r.top > window.innerHeight || r.bottom < 0) {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      setRect(visibleRect(s.target));
     };
     measure();
     window.addEventListener("resize", measure);
