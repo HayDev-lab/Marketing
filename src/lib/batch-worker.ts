@@ -14,7 +14,7 @@
 
 import { api } from "@/lib/use-i18n";
 
-export type DrivableKind = "CONTENT_BATCH" | "TREND_SEARCH";
+export type DrivableKind = "CONTENT_BATCH" | "TREND_SEARCH" | "TREND_ADAPT";
 
 export interface JobRun {
   jobId: string;
@@ -96,7 +96,9 @@ function emitFinish(e: JobFinishEvent) {
 function stepEndpoint(kind: DrivableKind, jobId: string): string {
   return kind === "CONTENT_BATCH"
     ? `/api/plans/content/batch-jobs/${jobId}/step`
-    : `/api/trends/jobs/${jobId}/step`;
+    : kind === "TREND_ADAPT"
+      ? `/api/trends/adapt-jobs/${jobId}/step`
+      : `/api/trends/jobs/${jobId}/step`;
 }
 
 function makeToken(): string {
@@ -149,7 +151,7 @@ export async function driveJob(run: JobRun): Promise<boolean> {
       let kind: JobFinishKind;
       if (st.status === "COMPLETED") kind = "COMPLETED";
       else if (st.status === "RETRYING" || st.status === "WAITING_PROVIDER") kind = "RETRY_LATER";
-      else if (st.status === "CANCELLED") kind = done > 0 && run.kind === "CONTENT_BATCH" ? "PARTIAL" : "CANCELLED";
+      else if (st.status === "CANCELLED") kind = done > 0 && (run.kind === "CONTENT_BATCH" || run.kind === "TREND_ADAPT") ? "PARTIAL" : "CANCELLED";
       else if (st.status === "NEEDS_USER_ACTION" || st.status === "FAILED") kind = "FAILED";
       else kind = "FAILED";
       emitFinish({ run, kind, done, total });

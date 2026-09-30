@@ -23,6 +23,7 @@ interface JobDto {
   inputJson: string | null;
   outputJson: string | null;
   nextPollAt: string | null;
+  createdAt?: string;
 }
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
@@ -35,7 +36,34 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   }
 }
 
-const KINDS: DrivableKind[] = ["CONTENT_BATCH", "TREND_SEARCH"];
+const KINDS: DrivableKind[] = ["CONTENT_BATCH", "TREND_SEARCH", "TREND_ADAPT"];
+const QUEUED_STATES = ["QUEUED", "PROCESSING", "RETRYING"];
+
+// Opt-in trend scheduler (searchFrequencyHours). Throttled to one policy
+// check per 5 minutes and skipped entirely while any trend-family job is
+// alive. The SERVER re-checks the frequency window (?scheduled=1) — the
+// client can never fire a search more often than the policy allows.
+const SCHEDULER_THROTTLE_MS = 5 * 60_000;
+let lastSchedulerCheck = 0;
+async function maybeScheduleTrendSearch(jobList: JobDto[], activeTrendFamily: boolean): Promise<void> {
+  const now = Date.now();
+  if (activeTrendFamily || now - lastSchedulerCheck < SCHEDULER_THROTTLE_MS) return;
+  lastSchedulerCheck = now;
+  try {
+    const res = await api<{ policy?: { enabled?: boolean; trendDiscovery?: boolean; trendSchedulerEnabled?: boolean; searchFrequencyHours?: number } }>("/api/autopilot");
+    const p = res?.policy;
+    if (!p?.enabled || !p.trendDiscovery || !p.trendSchedulerEnabled) return;
+    // cheap pre-filter from the feed: skip if a recent TREND_SEARCH is visible
+    const recent = jobList.find(
+      (j) => j.kind === "TREND_SEARCH" && j.createdAt && now - new Date(j.createdAt).getTime() < Math.max(p.searchFrequencyHours ?? 24, 1) * 3_600_000,
+    );
+    if (recent) return;
+    // the server decides authoristically (skipped:frequency means: too soon)
+    await api("/api/autopilot/trend-search?scheduled=1", { method: "POST" });
+  } catch {
+    /* policy endpoint unreachable or submit refused — honest retry next window */
+  }
+}
 
 // ---- Global background job worker (mounted once in the app shell) ----
 // Polls the job feed every 10s; any in-flight CONTENT_BATCH or TREND_SEARCH
@@ -68,6 +96,14 @@ export function BatchWorkerChip() {
           else if (e.kind === "NETWORK") toast.error(t("worker.trendFailed"), { description: t("worker.trendInterrupted") });
           return;
         }
+        if (e.run.kind === "TREND_ADAPT") {
+          if (e.kind === "COMPLETED") toast.success(t("worker.trendAdaptDone"));
+          else if (e.kind === "RETRY_LATER") toast.info(t("worker.trendRetrying"));
+          else if (e.kind === "CANCELLED" || e.kind === "PARTIAL") toast.info(t("worker.trendCancelled"));
+          else if (e.kind === "FAILED") toast.error(t("worker.trendAdaptFailed"));
+          else if (e.kind === "NETWORK") toast.error(t("worker.trendAdaptFailed"), { description: t("worker.trendInterrupted") });
+          return;
+        }
         if (e.kind === "COMPLETED") toast.success(t("planner.batchDone", { n: e.done }));
         else if (e.kind === "PARTIAL") toast.info(t("planner.batchPartial", { n: e.done }));
         else if (e.kind === "CANCELLED") toast.info(t("planner.batchStopped"));
@@ -91,14 +127,16 @@ export function BatchWorkerChip() {
         const jobList = await api<JobDto[]>("/api/jobs?limit=30");
         if (disposed || pausedRef.current) return;
         const now = Date.now();
+        let activeTrendFamily = false;
         for (const j of jobList) {
           const kind = KINDS.find((k) => k === j.kind);
           if (!kind) continue;
-          if (!["QUEUED", "PROCESSING", "RETRYING"].includes(j.status)) continue;
+          if (!QUEUED_STATES.includes(j.status)) continue;
+          if (kind !== "CONTENT_BATCH") activeTrendFamily = true;
           if (isActive(j.id)) continue;
           // trend jobs in backoff window: wait — bounded retries, no hot loop
-          if (kind === "TREND_SEARCH" && j.nextPollAt && new Date(j.nextPollAt).getTime() > now) continue;
-          const inp = parseJson<{ planId?: string; indexes?: number[]; topic?: string; brandId?: string }>(j.inputJson, {});
+          if (kind !== "CONTENT_BATCH" && j.nextPollAt && new Date(j.nextPollAt).getTime() > now) continue;
+          const inp = parseJson<{ planId?: string; indexes?: number[]; topic?: string; brandId?: string; trendTitle?: string; autopilot?: boolean; createdAt?: string }>(j.inputJson, {});
           const out = parseJson<{ done?: number; trendsFound?: number }>(j.outputJson, {});
           if (kind === "CONTENT_BATCH" && !inp.planId) continue;
           // auto-resume: fire-and-forget — driveJob registers in the shared registry,
@@ -107,11 +145,15 @@ export function BatchWorkerChip() {
             jobId: j.id,
             kind,
             planId: inp.planId,
-            topic: inp.topic,
+            topic: kind === "TREND_ADAPT" ? inp.trendTitle : inp.topic,
             done: typeof out.trendsFound === "number" ? out.trendsFound : typeof out.done === "number" ? out.done : 0,
             total: kind === "CONTENT_BATCH" && Array.isArray(inp.indexes) ? inp.indexes.length : 0,
           });
         }
+        // opt-in trend scheduler: one policy-bounded search per frequency window.
+        // Quota-safe by construction: fingerprint dedup server-side + frequency
+        // check here + never fires while a trend job is running + 5-min throttle.
+        void maybeScheduleTrendSearch(jobList, activeTrendFamily);
       } catch {
         /* job feed unreachable — honest retry on the next tick */
       } finally {
@@ -133,11 +175,13 @@ export function BatchWorkerChip() {
 
   const busy = runs.length > 0;
   const batchRuns = runs.filter((r) => r.kind === "CONTENT_BATCH");
-  const trendRuns = runs.filter((r) => r.kind === "TREND_SEARCH");
+  const searchRuns = runs.filter((r) => r.kind === "TREND_SEARCH");
+  const adaptRuns = runs.filter((r) => r.kind === "TREND_ADAPT");
+  const trendFirst = searchRuns[0];
+  const adaptFirst = adaptRuns[0];
   const done = batchRuns.reduce((s, r) => s + r.done, 0);
   const total = batchRuns.reduce((s, r) => s + r.total, 0);
   const first = batchRuns[0];
-  const trendFirst = trendRuns[0];
 
   return (
     <AnimatePresence>
@@ -161,15 +205,22 @@ export function BatchWorkerChip() {
               </span>
             )}
             <button
-              onClick={() => setView(trendFirst ? "trends" : "planner")}
+              onClick={() => setView(trendFirst || adaptFirst ? "trends" : "planner")}
               className="focus-glow min-w-0 rounded-lg text-left"
-              aria-label={trendFirst ? t("worker.trendTitle") : t("worker.title", { n: batchRuns.length })}
+              aria-label={trendFirst ? t("worker.trendTitle") : adaptFirst ? t("worker.trendAdaptTitle") : t("worker.title", { n: batchRuns.length })}
             >
               {trendFirst ? (
                 <>
                   <p className="text-xs font-semibold leading-tight">{t("worker.trendLabel")}</p>
                   <p className="mt-0.5 max-w-44 truncate font-mono text-[11px] leading-tight text-muted-foreground">
                     {trendFirst.topic || t("worker.trendLabel")}
+                  </p>
+                </>
+              ) : adaptFirst ? (
+                <>
+                  <p className="text-xs font-semibold leading-tight">{t("worker.trendAdaptLabel")}</p>
+                  <p className="mt-0.5 max-w-44 truncate font-mono text-[11px] leading-tight text-muted-foreground">
+                    {adaptFirst.topic || t("worker.trendAdaptLabel")}
                   </p>
                 </>
               ) : (
@@ -187,7 +238,7 @@ export function BatchWorkerChip() {
                 </>
               )}
               {/* segmented mini progress for the first batch run */}
-              {!trendFirst && first && (
+              {!trendFirst && !adaptFirst && first && (
                 <div className="mt-1.5 flex gap-0.5" aria-hidden>
                   {Array.from({ length: Math.min(first.total, 12) }, (_, i) => (
                     <span

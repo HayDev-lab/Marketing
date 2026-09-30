@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
+import { ok, handle, ApiError, requireUser } from "@/lib/api";
 import { audit } from "@/lib/ledger";
 import { llmCompleteJson } from "@/lib/ai/zai";
+import { createDraftFromAdaptation } from "@/lib/trends/draft-bridge";
 
 // GET /api/content?brandId=&state=
 export async function GET(req: NextRequest) {
@@ -25,22 +26,18 @@ export async function POST(req: NextRequest) {
   return handle(async () => {
     const user = await requireUser();
     const body = await req.json();
-    const brand = await db.brand.findUnique({ where: { id: String(body.brandId) }, include: { profile: true } });
-    if (!brand || brand.userId !== user.id) throw new ApiError(404, "BRAND_NOT_FOUND", "Brand not found");
-    const platform = ["instagram", "tiktok", "facebook", "telegram"].includes(body.platform) ? body.platform : "instagram";
-    const language = ["hy", "ru", "en"].includes(body.language) ? body.language : "hy";
-    const contentType = ["IMAGE_POST", "VIDEO_REEL", "STORY", "CAROUSEL", "POST"].includes(body.contentType) ? body.contentType : "IMAGE_POST";
 
-    // Trend→Draft bridge: a structured TrendAdaptation can seed the whole draft
+    // Trend→Draft bridge: a structured TrendAdaptation seeds the whole draft.
+    // The full adaptation is loaded first so aiWrite keeps trend context.
     let adaptation: null | {
       id: string; trendId: string; platform: string; contentType: string; language: string | null;
       hook: string | null; captionIdea: string | null; scriptOutline: string | null;
-      trend: { id: string; sourceUrl: string; hashtagsJson: string | null };
+      trendTitle: string; trendHashtags: string | null;
     } = null;
     if (body.adaptationId) {
       const row = await db.trendAdaptation.findUnique({
         where: { id: String(body.adaptationId) },
-        include: { trend: { select: { id: true, sourceUrl: true, hashtagsJson: true } } },
+        include: { trend: { select: { id: true, title: true, hashtagsJson: true } } },
       });
       if (!row || row.userId !== user.id) throw new ApiError(404, "ADAPTATION_NOT_FOUND", "Adaptation not found");
       adaptation = {
@@ -52,9 +49,16 @@ export async function POST(req: NextRequest) {
         hook: row.hook,
         captionIdea: row.captionIdea,
         scriptOutline: row.scriptOutline,
-        trend: row.trend,
+        trendTitle: row.trend.title,
+        trendHashtags: row.trend.hashtagsJson,
       };
     }
+
+    const brand = await db.brand.findUnique({ where: { id: String(body.brandId) }, include: { profile: true } });
+    if (!brand || brand.userId !== user.id) throw new ApiError(404, "BRAND_NOT_FOUND", "Brand not found");
+    const platform = ["instagram", "tiktok", "facebook", "telegram"].includes(body.platform) ? body.platform : "instagram";
+    const language = ["hy", "ru", "en"].includes(body.language) ? body.language : "hy";
+    const contentType = ["IMAGE_POST", "VIDEO_REEL", "STORY", "CAROUSEL", "POST"].includes(body.contentType) ? body.contentType : "IMAGE_POST";
 
     let hook = body.hook ?? null;
     let caption = body.caption ?? null;
@@ -64,9 +68,9 @@ export async function POST(req: NextRequest) {
       hook = adaptation.hook ?? hook;
       caption = adaptation.captionIdea ?? caption;
       script = adaptation.scriptOutline ?? script;
-      if (adaptation.trend.hashtagsJson) {
+      if (adaptation.trendHashtags) {
         try {
-          const tags: unknown = JSON.parse(adaptation.trend.hashtagsJson);
+          const tags: unknown = JSON.parse(adaptation.trendHashtags);
           if (Array.isArray(tags) && tags.length) hashtags = tags.map(String).join(" ");
         } catch { /* keep body hashtags */ }
       }
@@ -103,7 +107,7 @@ Return JSON: {"hook": str, "caption": str, "script": str (only for video types, 
         brandId: brand.id,
         contentPlanId: body.contentPlanId ?? null,
         trendId: adaptation?.trendId ?? body.trendId ?? null,
-        title: String(body.title ?? "Untitled").slice(0, 200),
+        title: String(body.title ?? adaptation?.trendTitle ?? "Untitled").slice(0, 200),
         platform,
         language,
         contentType,
@@ -114,7 +118,7 @@ Return JSON: {"hook": str, "caption": str, "script": str (only for video types, 
         approvalState: "DRAFT",
         metaJson: JSON.stringify({
           ...(body.meta && typeof body.meta === "object" ? body.meta : {}),
-          ...(adaptation ? { fromAdaptation: adaptation.id, fromTrendSource: adaptation.trend.sourceUrl } : {}),
+          ...(adaptation ? { fromAdaptation: adaptation.id, source: "trend_adaptation" } : {}),
         }),
       },
     });

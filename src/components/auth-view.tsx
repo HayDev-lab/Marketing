@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Sparkles, Radar, Globe, ShieldCheck, Languages } from "lucide-react";
+import { Sparkles, Radar, Globe, ShieldCheck, Languages, Zap } from "lucide-react";
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
 
 export function AuthView({ onAuthed }: { onAuthed: () => void }) {
@@ -43,6 +43,29 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
         INVALID_EMAIL: "auth.invalidEmail",
       };
       setError(t(map[code as string] ?? "common.error"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // One-click demo entrance — the shared sandbox workspace (real account,
+  // real data). Credentials never touch the client bundle: the server
+  // creates the session itself.
+  const demoLogin = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api<{ locale?: string }>("/api/auth", {
+        method: "POST",
+        body: JSON.stringify({ action: "demo" }),
+      });
+      if (res?.locale && ["hy", "ru", "en"].includes(res.locale)) {
+        setLocale(res.locale as Locale);
+        setLocaleStore(res.locale as Locale);
+      }
+      onAuthed();
+    } catch {
+      setError(t("common.error"));
     } finally {
       setLoading(false);
     }
@@ -164,7 +187,19 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
               </Tabs>
 
               <div className="mt-6 border-t border-border pt-4">
-                <Button variant="outline" disabled className="h-11 w-full justify-center opacity-50" title={t("auth.googleBlocked")}>
+                <Button
+                  type="button"
+                  disabled={loading}
+                  onClick={demoLogin}
+                  className="h-11 w-full justify-center bg-[var(--neon-2)]/15 text-foreground hover:bg-[var(--neon-2)]/25"
+                >
+                  <Zap className="mr-2 h-4 w-4 text-[var(--neon-2)]" aria-hidden />
+                  {loading ? t("common.loading") : t("auth.demoLogin")}
+                </Button>
+                <p className="mt-2 text-center text-[11px] leading-relaxed text-muted-foreground">
+                  {t("auth.demoHint")}
+                </p>
+                <Button variant="outline" disabled className="mt-3 h-11 w-full justify-center opacity-50" title={t("auth.googleBlocked")}>
                   <Globe className="mr-2 h-4 w-4" /> Google OAuth — {t("auth.googleBlocked")}
                 </Button>
                 <p className="mt-2 text-center text-[11px] leading-relaxed text-muted-foreground">

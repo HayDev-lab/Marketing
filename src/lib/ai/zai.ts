@@ -118,7 +118,35 @@ export function extractJson<T>(raw: string): T {
   if (start > 0) text = text.slice(start);
   const lastBrace = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
   if (lastBrace >= 0) text = text.slice(0, lastBrace + 1);
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // Bounded second chance for the two most common LLM slips:
+    // trailing commas and unquoted string tokens inside flat arrays
+    // (observed live: "hashtags": [denGems, #YerevanSeason]).
+    // Anything else still throws — honest failure, callers retry bounded.
+    return JSON.parse(repairLooseJson(text)) as T;
+  }
+}
+
+function repairLooseJson(text: string): string {
+  // 1. trailing commas
+  let s = text.replace(/,\s*([\]}])/g, "$1");
+  // 2. quote bare tokens in FLAT comma-separated arrays only (no nested brackets)
+  s = s.replace(/\[([^\[\]{}]*?)\]/g, (m: string, inner: string) => {
+    if (!inner.trim()) return m;
+    const parts = inner.split(",").map((p) => {
+      const t = p.trim();
+      if (!t) return t;
+      if (/^".*"$/.test(t) || /^'.*'$/.test(t)) return JSON.stringify(t.slice(1, -1));
+      if (/^-?\d+(\.\d+)?$/.test(t) || /^(true|false|null)$/.test(t)) return t;
+      // bare token — also strip stray unbalanced quotes the model sometimes
+      // leaves (observed live: `WineHeritage",` → tag must not keep the `"` )
+      return JSON.stringify(t.replace(/^["']+|["']+$/g, ""));
+    });
+    return `[${parts.join(",")}]`;
+  });
+  return s;
 }
 
 // ---------- Image ----------

@@ -5,6 +5,7 @@ import { audit } from "@/lib/ledger";
 import { jobs } from "@/lib/jobs";
 import { runTrendSearch } from "@/lib/trends/engine";
 import { backoffDelayMs } from "@/lib/trends/dedup";
+import { enqueueAdaptationsAfterSearch } from "@/lib/trends/autopilot-chain";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -75,6 +76,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     try {
       const result = await runTrendSearch({
         userId: user.id,
+        jobId: job.id,
         brandId: typeof input.brandId === "string" ? input.brandId : null,
         topic: typeof input.topic === "string" && input.topic ? input.topic : "social media marketing",
         market: typeof input.market === "string" && input.market ? input.market : "Armenia",
@@ -94,6 +96,30 @@ export async function POST(req: NextRequest, { params }: Params) {
       }
 
       await db.generationJob.update({ where: { id: job.id }, data: { checkpointJson: JSON.stringify({ stage: "persisted", found: result.trends.length }) } });
+
+      // Autopilot chain: a policy-bounded search feeds bounded TREND_ADAPT jobs.
+      // Runs BEFORE markCompleted so the persisted output carries the chain
+      // stats; failures here must never fail the completed search — the chain
+      // is best-effort and each adapt job is independently durable.
+      let adaptationsQueued = 0;
+      let adaptSkipped = 0;
+      if (input.autopilot === true) {
+        try {
+          const enq = await enqueueAdaptationsAfterSearch(user.id, job.id);
+          adaptationsQueued = enq.queued;
+          adaptSkipped = enq.skippedExisting + enq.skippedThreshold + enq.skippedHypothesis;
+        } catch (chainErr) {
+          await audit.log({
+            userId: user.id,
+            actorType: "SYSTEM",
+            action: "autopilot.trend_adapt_enqueue_failed",
+            objectType: "GenerationJob",
+            objectId: job.id,
+            summary: chainErr instanceof Error ? chainErr.message.slice(0, 200) : "enqueue failed",
+          });
+        }
+      }
+
       await jobs.markCompleted(job.id, {
         trendsFound: result.trends.length,
         sourcesCount: result.sourcesCount,
@@ -102,13 +128,16 @@ export async function POST(req: NextRequest, { params }: Params) {
         providerId: result.providerId,
         providerError: result.providerError ?? null,
         sources: result.sources.slice(0, 12),
+        adaptationsQueued,
+        adaptSkipped,
       }, undefined, 0.005);
+
       await audit.log({
         userId: user.id,
         action: "trend.search_completed",
         objectType: "GenerationJob",
         objectId: job.id,
-        summary: `Trend search: ${result.trends.length} signals, ${result.sourcesCount} sources${result.duplicatesCollapsed ? `, ${result.duplicatesCollapsed} duplicates collapsed` : ""}${result.searchFallback ? " (fallback: hypotheses)" : ""}`,
+        summary: `Trend search: ${result.trends.length} signals, ${result.sourcesCount} sources${result.duplicatesCollapsed ? `, ${result.duplicatesCollapsed} duplicates collapsed` : ""}${result.searchFallback ? " (fallback: hypotheses)" : ""}${adaptationsQueued ? `, ${adaptationsQueued} adapt jobs queued` : ""}`,
       });
       return ok({
         status: "COMPLETED",
@@ -117,6 +146,8 @@ export async function POST(req: NextRequest, { params }: Params) {
         duplicates: result.duplicatesCollapsed,
         searchFallback: result.searchFallback,
         providerError: result.providerError ?? null,
+        adaptationsQueued,
+        adaptSkipped,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Trend search failed";

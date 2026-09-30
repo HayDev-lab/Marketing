@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { createHash } from "crypto";
 import { db } from "@/lib/db";
 import { hashPassword, verifyPassword, validateEmail, validatePassword, createSession, destroySession, getCurrentUser, rateLimit } from "@/lib/auth";
 import { ok, fail, handle, ApiError } from "@/lib/api";
@@ -72,6 +73,45 @@ export async function POST(req: NextRequest) {
       await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.login", summary: `User logged in` });
       return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale });
+    }
+
+    if (action === "demo") {
+      // Demo entrance: one click into the shared sandbox workspace (real
+      // account, real data — nothing is faked). The credentials stay
+      // server-side; the client bundle never contains them.
+      const ip = req.headers.get("x-forwarded-for") ?? "local";
+      const rl = rateLimit(`demo:${ip}`, 10, 60_000);
+      if (!rl.allowed) throw new ApiError(429, "RATE_LIMITED", `Too many attempts. Retry in ${rl.retryAfterSec}s`);
+      const email = "qa4@haydev.am";
+      let user = await db.user.findUnique({ where: { email } });
+      if (!user) {
+        // self-heal: recreate the demo workspace if it was ever wiped
+        const password = `demo-${createHash("sha256").update(String(Date.now())).digest("hex").slice(0, 18)}`;
+        const created = await db.user.create({
+          data: { email, name: "Demo Workspace", passwordHash: hashPassword(password), locale: "hy" },
+        });
+        user = created;
+        const templateCount = await db.promptTemplate.count({ where: { userId: null } });
+        if (templateCount === 0) {
+          const seeds = buildSeedTemplates();
+          await db.promptTemplate.createMany({
+            data: seeds.map((s) => ({
+              niche: s.niche, type: s.type, title: s.title, body: s.body,
+              variablesJson: JSON.stringify(s.variables), tagsJson: JSON.stringify(s.tags),
+            })),
+          });
+        }
+        await db.providerConfig.createMany({
+          data: PROVIDER_REGISTRY.map((p) => ({
+            userId: created.id, providerId: p.providerId, category: p.category,
+            enabled: p.status !== "BLOCKED_EXTERNAL", status: p.status, defaultModel: p.defaultModel,
+          })),
+        });
+        await db.autopilotPolicy.create({ data: { userId: created.id } }).catch(() => {});
+      }
+      await createSession(user.id, req.headers.get("user-agent") ?? undefined);
+      await audit.log({ userId: user.id, action: "auth.demo", summary: "Demo workspace login" });
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, demo: true });
     }
 
     if (action === "logout") {

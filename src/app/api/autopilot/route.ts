@@ -4,7 +4,7 @@ import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit, ledger } from "@/lib/ledger";
 import { llmCompleteJson, webSearch } from "@/lib/ai/zai";
 
-const BOOL_KEYS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration"] as const;
+const BOOL_KEYS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration", "trendSchedulerEnabled"] as const;
 
 // GET /api/autopilot — policy + last cycle results
 export async function GET() {
@@ -32,7 +32,7 @@ export async function PATCH(req: NextRequest) {
     for (const k of ["dailyBudget", "weeklyBudget", "monthlyBudget", "maxGenerationCost", "minQualityThreshold"] as const) {
       if (typeof body[k] === "number") data[k] = Math.max(0, body[k]);
     }
-    for (const k of ["maxRetries", "maxContentPerDay", "searchFrequencyHours", "maxSignalsPerRun"] as const) {
+    for (const k of ["maxRetries", "maxContentPerDay", "searchFrequencyHours", "maxSignalsPerRun", "maxAdaptPerRun"] as const) {
       if (typeof body[k] === "number") data[k] = Math.max(0, Math.floor(body[k]));
     }
     for (const k of ["minimumRelevance", "minimumConfidence"] as const) {

@@ -47,6 +47,8 @@ export interface TrendSearchRunParams {
   maxSignals?: number;
   minRelevance?: number;
   minConfidence?: number;
+  /** originating durable job — lets the autopilot chain find exactly this run's signals */
+  jobId?: string | null;
 }
 
 export interface TrendSearchRunResult {
@@ -97,7 +99,7 @@ export interface SerializedTrend {
   createdAt: string;
 }
 
-type TrendRow = {
+export type TrendRow = {
   id: string; title: string; summary: string | null; sourceName: string; sourceUrl: string;
   platform: string | null; region: string | null; country: string | null; language: string | null;
   status: string; confidence: number; relevanceScore: number | null; freshnessScore: number | null;
@@ -154,7 +156,13 @@ export function serializeTrend(t: TrendRow): SerializedTrend {
     discoveredAt: t.discoveredAt.toISOString(),
     createdAt: t.createdAt.toISOString(),
     keywords: parseStringArray(t.keywordsJson),
-    hashtags: parseStringArray(t.hashtagsJson),
+    // display-level honesty: some legacy rows (pre-normalisation) still store
+    // tags with a leading '#'; the UI prepends its own — strip here so every
+    // consumer (cards, details, export) renders exactly one '#'. Also strip
+    // stray quote chars the model occasionally leaves inside a tag.
+    hashtags: parseStringArray(t.hashtagsJson)
+      .map((h) => h.replace(/^#+/, "").replace(/^["']+|["']+$/g, "").replace(/^#+/, ""))
+      .filter(Boolean),
     audience,
     waysToUse,
     evidence,
@@ -203,7 +211,7 @@ ${degraded ? "[] (live search unavailable)" : JSON.stringify(sources.map((s) => 
 REQUEST: topic: ${opts.topic}; market: ${opts.market}; platform: ${opts.platform}; language: ${opts.language}; objective: ${opts.objective ?? "general"}
 BRAND: ${opts.brandName ?? "generic"}; audience summary: ${opts.brandSummary ?? "unknown"}; tone: ${opts.brandTone ?? "unknown"}
 
-Return JSON array (3-6 items):
+Return JSON array (3-6 items). Every object key must be a quoted string, every array element must be a quoted JSON string (no bare words, no unquoted #tags):
 [{"title": str, "summary": str, "platform": "instagram|tiktok|facebook|telegram|web", "category": str, "audience": str, "keywords": [str], "hashtags": [str], "evidence_quote": str (quote from source snippet, "" if none), "metrics_observed": str (only if literally present, else ""), "status": str, "confidence": 0..1, "relevanceScore": 0..1, "brandFitScore": 0..1, "brandFitReason": str, "suggestedAdaptation": str (original adaptation for this brand — mechanics/pacing/hook structure, never a 1:1 copy), "waysToUse": [str] (2-3 concrete usage ideas), "risk": str, "sourceIndex": int (0-based into SOURCES, or -1 if no sources)}]`;
 
   // one cheap LLM-only retry on malformed JSON — avoids re-running the paid search
@@ -318,6 +326,7 @@ export async function runTrendSearch(params: TrendSearchRunParams): Promise<Tren
       data: {
         userId: params.userId,
         brandId: params.brandId,
+        jobId: params.jobId ?? null,
         title: String(idea.title).slice(0, 200),
         summary: idea.summary ? String(idea.summary).slice(0, 1000) : null,
         sourceName: src?.host ?? "LLM hypothesis (unverified)",

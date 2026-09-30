@@ -19,7 +19,7 @@ import {
   Flame, Search, Loader2, ExternalLink, Sparkles, ShieldAlert, Copy, Radar,
   ChevronDown, ChevronUp, Gauge, Globe2, Activity, FilePlus2, Quote, Wifi,
   Instagram, Facebook, Send, Music2, Eye, ShieldCheck, X, Landmark, Users,
-  Layers, Lightbulb, Target, AlertTriangle, CalendarClock,
+  Layers, Lightbulb, Target, AlertTriangle, CalendarClock, Download, FileJson,
 } from "lucide-react";
 import { driveJob, onBatchFinish, onBatchProgress, type JobRun } from "@/lib/batch-worker";
 
@@ -322,15 +322,20 @@ export function TrendsModule() {
     } catch { /* honest silent refresh failure — feed still renders */ }
   }, [loadTrends]);
 
-  // central finish events: refresh the feed when a TREND_SEARCH completes
+  // central finish events: refresh the feed when a TREND_SEARCH completes,
+  // or when an autopilot TREND_ADAPT finishes (adaptation state changed)
   useEffect(
     () =>
       onBatchFinish((e) => {
+        if (e.run.kind === "TREND_ADAPT") {
+          void loadTrends();
+          return;
+        }
         if (e.run.kind !== "TREND_SEARCH") return;
         setJobRun((cur) => (cur && cur.jobId === e.run.jobId ? null : cur));
         if (e.kind === "COMPLETED") void refreshAfterSearch(e.run.jobId);
       }),
-    [refreshAfterSearch],
+    [refreshAfterSearch, loadTrends],
   );
   useEffect(() => onBatchProgress((runs) => {
     const tr = runs.find((r) => r.kind === "TREND_SEARCH");
@@ -529,9 +534,35 @@ export function TrendsModule() {
     <div className="grid gap-5">
       {/* header + signal radar */}
       <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="grid gap-4">
-        <div>
-          <h1 className="text-xl font-semibold sm:text-2xl">{t("trends.title")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("trends.subtitle")}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold sm:text-2xl">{t("trends.title")}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">{t("trends.subtitle")}</p>
+          </div>
+          {trends.length > 0 && (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 glass"
+                onClick={() => { window.location.href = "/api/trends/export?format=csv"; }}
+                title={t("trends.exportCsv")}
+              >
+                <Download className="h-4 w-4 text-[var(--neon-2)]" aria-hidden />
+                <span className="ml-1.5">CSV</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 glass"
+                onClick={() => { window.location.href = "/api/trends/export?format=json"; }}
+                title={t("trends.exportJson")}
+              >
+                <FileJson className="h-4 w-4 text-[var(--neon-3)]" aria-hidden />
+                <span className="ml-1.5">JSON</span>
+              </Button>
+            </div>
+          )}
         </div>
         <Card className="glass overflow-hidden rounded-2xl">
           <CardContent className="p-0">

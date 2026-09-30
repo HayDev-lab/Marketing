@@ -44,6 +44,7 @@ interface Policy {
   dailyBudget: number; weeklyBudget: number; monthlyBudget: number; maxGenerationCost: number;
   maxRetries: number; maxContentPerDay: number; minQualityThreshold: number;
   minimumRelevance: number; minimumConfidence: number; searchFrequencyHours: number; maxSignalsPerRun: number;
+  maxAdaptPerRun: number;
 }
 
 interface AuditLog {
@@ -90,7 +91,7 @@ function statusIcon(status: ProviderStatus) {
 }
 
 const CATEGORY_ORDER = ["LLM", "Research", "Image", "Video", "TTS", "VoiceClone", "Music", "Avatar", "Transcription", "Publishing"];
-const POLICY_BOOLEANS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration"] as const;
+const POLICY_BOOLEANS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration", "trendSchedulerEnabled"] as const;
 const PLATFORM_CHIPS = ["instagram", "tiktok", "facebook", "telegram"];
 const LANG_CHIPS = ["hy", "ru", "en"];
 const ACTOR_FILTERS = ["ALL", "WEB_UI", "MCP", "AUTOPILOT", "SYSTEM"] as const;
@@ -333,6 +334,7 @@ function AutopilotTab() {
       body.minimumConfidence = Math.min(1, Math.max(0, Number(policy.minimumConfidence) || 0));
       body.searchFrequencyHours = Math.max(1, Math.floor(Number(policy.searchFrequencyHours) || 24));
       body.maxSignalsPerRun = Math.max(1, Math.floor(Number(policy.maxSignalsPerRun) || 5));
+      body.maxAdaptPerRun = Math.max(0, Math.floor(Number(policy.maxAdaptPerRun) || 0));
       await api("/api/autopilot", { method: "PATCH", body: JSON.stringify(body) });
       toast.success(t("autopilot.saved"));
       await load();
@@ -443,7 +445,9 @@ function AutopilotTab() {
               {numField("ap-minconf", t("autopilot.minimumConfidence"), policy.minimumConfidence, (v) => setPolicy({ ...policy, minimumConfidence: v }), "0.05")}
               {numField("ap-freq", t("autopilot.searchFrequency"), policy.searchFrequencyHours, (v) => setPolicy({ ...policy, searchFrequencyHours: v }))}
               {numField("ap-maxsig", t("autopilot.maxSignals"), policy.maxSignalsPerRun, (v) => setPolicy({ ...policy, maxSignalsPerRun: v }))}
+              {numField("ap-maxadapt", t("autopilot.maxAdaptPerRun"), policy.maxAdaptPerRun, (v) => setPolicy({ ...policy, maxAdaptPerRun: v }))}
             </div>
+            <p className="text-[11px] text-muted-foreground">{t("autopilot.chainNote")}</p>
           </section>
 
           {/* budgets */}

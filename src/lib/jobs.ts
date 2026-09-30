@@ -14,6 +14,7 @@ export type JobKind =
   | "TRANSCRIPTION"
   | "ANALYZE_SITE"
   | "TREND_SEARCH"
+  | "TREND_ADAPT"
   | "PLAN"
   | "CONTENT_BATCH"
   | "AUTOPILOT_CYCLE";

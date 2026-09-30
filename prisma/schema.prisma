@@ -582,7 +582,9 @@ model AutopilotPolicy {
   minimumRelevance      Float   @default(0.55)
   minimumConfidence     Float   @default(0.5)
   searchFrequencyHours  Int     @default(24)
+  trendSchedulerEnabled Boolean @default(false) // opt-in periodic TREND_SEARCH (quota-safe: fingerprint + frequency guard)
   maxSignalsPerRun      Int     @default(5)
+  maxAdaptPerRun        Int     @default(2)     // autopilot TREND_ADAPT jobs spawned per TREND_SEARCH (bounded)
   allowImageGeneration  Boolean @default(false)
   allowVideoGeneration  Boolean @default(false)
   updatedAt             DateTime @updatedAt
