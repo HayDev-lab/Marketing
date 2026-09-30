@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useApp } from "@/lib/store";
-import { useI18n, api } from "@/lib/use-i18n";
+import { useI18n, api, setStoredSessionToken } from "@/lib/use-i18n";
 import { SignalCore } from "@/components/signal-core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,7 +58,7 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
     setError(null);
     setNotice(null);
     try {
-      await api("/api/auth", {
+      const res = await api<{ sessionToken?: string }>("/api/auth", {
         method: "POST",
         body: JSON.stringify({
           action: mode,
@@ -68,6 +68,9 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
           locale,
         }),
       });
+      // Persist the session token for contexts where cookies are dropped
+      // (cross-site iframe preview panels) — header fallback on every request.
+      if (res?.sessionToken) setStoredSessionToken(res.sessionToken);
       setLocaleStore(locale);
       onAuthed();
     } catch (err) {
@@ -92,10 +95,11 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
     setError(null);
     setNotice(null);
     try {
-      const res = await api<{ locale?: string }>("/api/auth", {
+      const res = await api<{ locale?: string; sessionToken?: string }>("/api/auth", {
         method: "POST",
         body: JSON.stringify({ action: "demo" }),
       });
+      if (res?.sessionToken) setStoredSessionToken(res.sessionToken);
       if (res?.locale && ["hy", "ru", "en"].includes(res.locale)) {
         setLocale(res.locale as Locale);
         setLocaleStore(res.locale as Locale);

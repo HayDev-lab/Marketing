@@ -521,3 +521,26 @@ Stage Summary:
 - Stale activeBrandId больше не produces ложных ошибок — bootstrap самохилится.
 - Риск: пароль передан в чате — при production перейти на email-доставку reset-ссылок (SMTP-провайдер) и сменить пароль.
 - Next: Round 11 Trend Engine (TASK 15) — главный трек; session management UI — nice-to-have.
+
+---
+Task ID: 19 (incident: «не заходит!» — сессия не держится в iframe)
+Agent: Z.ai Code (main)
+Task: Пользователь снова «не заходит» несмотря на рабочий пароль. Аудит показал: login и demo входы проходят УСПЕШНО (200 + auth.login в auditLog в 20:44-20:45), но сессия не сохраняется. Корень: preview-панель рендерит приложение в cross-site iframe → браузер не хранит SameSite=Lax cookie → каждый следующий запрос анонимный → пользователь снова видит экран входа.
+
+Work Log:
+- ДИАГНОЗ: auditLog — 3x auth.demo + auth.login подряд за минуту; dev.log — паттерн POST 200 → POST 401 → me 200 (user:null). Сервер и пароль исправны; сессия теряется на клиенте.
+- РЕШЕНИЕ (Bearer-фолбэк, работает в любом контексте):
+  - src/lib/use-i18n.ts: SESSION_TOKEN_KEY localStorage; getStoredSessionToken/setStoredSessionToken; api() теперь всегда шлёт x-session-token заголовок; setLocale тоже; новый helper assetUrl(path) добавляет ?token= для media-тегов.
+  - src/lib/auth.ts: resolveSessionToken (cookie → header); getCurrentUser через getUserFromToken; destroySession тоже понимает header; getUserFromToken экспортирован для query-fallback.
+  - src/app/api/auth/route.ts: login/register/demo возвращают sessionToken в payload.
+  - src/app/api/assets/[id]/raw/route.ts: auth = cookie → header → ?token= query (img/video/audio не умеют заголовки).
+  - Клиент: auth-view (login/register/demo сохраняют токен), app-shell logout (чистит токен), content.tsx + video-studio.tsx + image-studio.tsx + voice.tsx — все media-URL через assetUrl().
+- ВЕРИФИКАЦИЯ (curl, эмуляция iframe — БЕЗ cookie вообще):
+  1) login → sessionToken получен; 2) GET /api/auth/me только с header → ПОЛНЫЙ user (раньше: user:null — это и был баг); 3) без auth → user:null; 4) /api/brands с header → 200; 5) asset raw ?token=valid → 404 (auth прошёл, asset чужой — корректно); 6) asset raw ?token=bad → 401.
+- ВЕРИФИКАЦИЯ (браузер): logout → login owner@haydev.am/HayDev2026! → токен в localStorage (haydev_session_token), панель отрисовалась, reload → сессия держится, консоль 0 ошибок, lint 0, tsc src/ 0.
+
+Stage Summary:
+- Вход теперь устойчив в ЛЮБОМ контексте: top-level tab (cookie) и cross-site iframe (header-фолбэк + partitioned localStorage). Пользователь больше не «входит в пустоту».
+- Demo-вход тоже сохраняет токен — 3 клика подряд больше не нужны.
+- Риски: token в localStorage — приемлемый trade-off для sandbox (XSS-поверхность минимальна, скриптов третьих сторон нет); в production — SameSite=None;Secure за HTTPS + короткоживущие refresh-токены.
+- Next: Round 11 Trend Engine (TASK 15) — главный трек разработки.

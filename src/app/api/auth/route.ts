@@ -55,9 +55,10 @@ export async function POST(req: NextRequest) {
         })),
       });
       await db.autopilotPolicy.create({ data: { userId: user.id } }).catch(() => {});
-      await createSession(user.id, req.headers.get("user-agent") ?? undefined);
+      const sessionToken = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.register", summary: `User registered: ${email}` });
-      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale });
+      // sessionToken: needed when cookies are unavailable (cross-site iframe preview)
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, sessionToken });
     }
 
     if (action === "login") {
@@ -70,9 +71,9 @@ export async function POST(req: NextRequest) {
       if (!user || !verifyPassword(password, user.passwordHash)) {
         throw new ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password");
       }
-      await createSession(user.id, req.headers.get("user-agent") ?? undefined);
+      const sessionToken = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.login", summary: `User logged in` });
-      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale });
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, sessionToken });
     }
 
     if (action === "demo") {
@@ -109,9 +110,9 @@ export async function POST(req: NextRequest) {
         });
         await db.autopilotPolicy.create({ data: { userId: created.id } }).catch(() => {});
       }
-      await createSession(user.id, req.headers.get("user-agent") ?? undefined);
+      const sessionToken = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.demo", summary: "Demo workspace login" });
-      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, demo: true });
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, demo: true, sessionToken });
     }
 
     if (action === "request-reset") {

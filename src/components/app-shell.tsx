@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useApp, type ViewId } from "@/lib/store";
-import { useI18n, api } from "@/lib/use-i18n";
+import { useI18n, api, setStoredSessionToken } from "@/lib/use-i18n";
 import { SignalCore } from "@/components/signal-core";
 import { DashboardModule } from "@/components/modules/dashboard";
 import { BrandsModule } from "@/components/modules/brands";
@@ -67,6 +67,7 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
 
   const logout = async () => {
     await api("/api/auth", { method: "POST", body: JSON.stringify({ action: "logout" }) }).catch(() => {});
+    setStoredSessionToken(null);
     window.location.reload();
   };
 

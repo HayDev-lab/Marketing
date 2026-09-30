@@ -8,7 +8,7 @@ import {
   Mic, FileAudio, Copy, X, Check,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
-import { useI18n, api } from "@/lib/use-i18n";
+import { useI18n, api, assetUrl } from "@/lib/use-i18n";
 import { showStudioError } from "@/components/modules/image-studio";
 import { PROVIDER_REGISTRY } from "@/lib/ai/registry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -299,7 +299,7 @@ export function VoiceModule() {
             {lastResult && !generating && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="grid gap-2 rounded-xl border border-[var(--neon-2)]/40 bg-muted/20 p-4">
                 <span className="text-xs font-semibold uppercase tracking-wide text-[var(--neon-2)]">{t("studio.voc.result")}</span>
-                <audio controls src={lastResult.url} className="w-full" aria-label={t("studio.voc.result")} />
+                <audio controls src={assetUrl(lastResult.url)} className="w-full" aria-label={t("studio.voc.result")} />
               </motion.div>
             )}
           </CardContent>
@@ -486,7 +486,7 @@ export function VoiceModule() {
                       {r.voice} · {r.speed.toFixed(1)}× · {new Date(r.ts).toLocaleString()}
                     </p>
                   </div>
-                  <audio controls src={r.url} className="h-10 w-full" aria-label={t("studio.voc.recent")} />
+                  <audio controls src={assetUrl(r.url)} className="h-10 w-full" aria-label={t("studio.voc.recent")} />
                 </li>
               ))}
             </ul>

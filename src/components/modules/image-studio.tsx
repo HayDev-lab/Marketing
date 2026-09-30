@@ -7,7 +7,7 @@ import {
   Wand2, Download, ScanEye, X, Loader2, Sparkles, ImagePlus, CheckCircle2,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
-import { useI18n, api } from "@/lib/use-i18n";
+import { useI18n, api, assetUrl } from "@/lib/use-i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -273,7 +273,7 @@ export function ImageStudioModule() {
             ) : lastResult ? (
               <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="grid gap-3">
                 <div className="neon-border overflow-hidden rounded-xl">
-                  <img src={lastResult.url} alt={lastResult.prompt.slice(0, 80)} className="w-full object-cover" />
+                  <img src={assetUrl(lastResult.url)} alt={lastResult.prompt.slice(0, 80)} className="w-full object-cover" />
                 </div>
                 <div className="grid gap-1 text-xs text-muted-foreground">
                   <p><span className="font-medium text-foreground">{t("studio.img.metaProvider")}:</span> {lastResult.provider}</p>
@@ -281,7 +281,7 @@ export function ImageStudioModule() {
                   {lastResult.routedBecause && <p className="line-clamp-2"><span className="font-medium text-foreground">{t("studio.img.metaRouting")}:</span> {lastResult.routedBecause}</p>}
                 </div>
                 <Button asChild variant="outline" className="min-h-11 gap-2">
-                  <a href={lastResult.url} download={`haydev-image-${lastResult.assetId}.png`} target="_blank" rel="noreferrer">
+                  <a href={assetUrl(lastResult.url)} download={`haydev-image-${lastResult.assetId}.png`} target="_blank" rel="noreferrer">
                     <Download className="h-4 w-4" /> {t("studio.img.download")}
                   </a>
                 </Button>
@@ -313,7 +313,7 @@ export function ImageStudioModule() {
                   animate={{ opacity: 1, y: 0 }}
                   className="glass glass-hover grid gap-2 rounded-xl p-3"
                 >
-                  <img src={g.url} alt={g.prompt.slice(0, 60)} className="h-40 w-full rounded-lg border border-border/60 object-cover" />
+                  <img src={assetUrl(g.url)} alt={g.prompt.slice(0, 60)} className="h-40 w-full rounded-lg border border-border/60 object-cover" />
                   <p className="line-clamp-2 text-xs text-muted-foreground">{g.prompt}</p>
                   <p className="text-[10px] text-muted-foreground">{new Date(g.ts).toLocaleString()}</p>
                   <div className="flex gap-2">
@@ -327,7 +327,7 @@ export function ImageStudioModule() {
                       <ScanEye className="h-3.5 w-3.5 text-[var(--neon)]" /> {t("studio.img.useAsRef")}
                     </Button>
                     <Button asChild variant="ghost" size="sm" className="min-h-11 gap-1.5 text-xs" aria-label={t("studio.img.download")}>
-                      <a href={g.url} download={`haydev-image-${g.assetId}.png`} target="_blank" rel="noreferrer">
+                      <a href={assetUrl(g.url)} download={`haydev-image-${g.assetId}.png`} target="_blank" rel="noreferrer">
                         <Download className="h-3.5 w-3.5" />
                       </a>
                     </Button>

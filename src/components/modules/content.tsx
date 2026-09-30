@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useApp } from "@/lib/store";
-import { useI18n, api } from "@/lib/use-i18n";
+import { useI18n, api, assetUrl } from "@/lib/use-i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -128,7 +128,7 @@ function errText(e: unknown, fallback: string, known: string[], tr: (k: string) 
 
 // ---------- content package export ----------
 function buildMarkdown(d: ContentDetail, brandName: string): string {
-  const assetUrl = d.asset ? `${window.location.origin}/api/assets/${d.asset.id}/raw` : null;
+  const assetSrc = d.asset ? assetUrl(`${window.location.origin}/api/assets/${d.asset.id}/raw`) : null;
   const lines: string[] = [
     `# ${d.title}`,
     "",
@@ -454,7 +454,7 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
         digest.push("---", "", `## ${i + 1}. ${it.title}`, "", `- **Folder:** ${unique}/`, "");
         if (it.assetId) {
           try {
-            const res = await fetch(`/api/assets/${it.assetId}/raw`);
+            const res = await fetch(assetUrl(`/api/assets/${it.assetId}/raw`));
             if (res.ok) {
               const mime = res.headers.get("content-type") ?? "";
               const buf = new Uint8Array(await res.arrayBuffer());
@@ -703,13 +703,13 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
                 <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("content.media")}</h3>
                 {detail.asset ? (
                   detail.asset.kind === "IMAGE" ? (
-                    <img src={`/api/assets/${detail.asset.id}/raw`} alt={detail.asset.filename} className="max-h-72 w-full rounded-xl border border-border/60 object-cover" />
+                    <img src={assetUrl(`/api/assets/${detail.asset.id}/raw`)} alt={detail.asset.filename} className="max-h-72 w-full rounded-xl border border-border/60 object-cover" />
                   ) : detail.asset.kind === "VIDEO" ? (
-                    <video src={`/api/assets/${detail.asset.id}/raw`} controls className="max-h-72 w-full rounded-xl border border-border/60" aria-label={detail.asset.filename} />
+                    <video src={assetUrl(`/api/assets/${detail.asset.id}/raw`)} controls className="max-h-72 w-full rounded-xl border border-border/60" aria-label={detail.asset.filename} />
                   ) : (
                     <div className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
                       <AudioLines className="h-5 w-5 text-[var(--neon-2)]" aria-hidden />
-                      <audio src={`/api/assets/${detail.asset.id}/raw`} controls className="w-full" aria-label={detail.asset.filename} />
+                      <audio src={assetUrl(`/api/assets/${detail.asset.id}/raw`)} controls className="w-full" aria-label={detail.asset.filename} />
                     </div>
                   )
                 ) : detail.videoProject ? (
@@ -910,7 +910,7 @@ export function ContentModule(_props: { onBrandsChanged?: () => void }) {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        const pkg = { ...detail, brand: detailBrandName, exportedAt: new Date().toISOString(), assetUrl: detail.asset ? `/api/assets/${detail.asset.id}/raw` : null };
+                        const pkg = { ...detail, brand: detailBrandName, exportedAt: new Date().toISOString(), assetUrl: detail.asset ? assetUrl(`/api/assets/${detail.asset.id}/raw`) : null };
                         downloadText(`${safeFileStem(detail.title)}.json`, JSON.stringify(pkg, null, 2), "application/json");
                         toast.success(t("content.exportDone"));
                       }}

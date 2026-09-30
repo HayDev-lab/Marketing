@@ -8,7 +8,7 @@ import {
   Wand2, BookOpen, Palette, User, CheckCircle2, XCircle, X, CircleDashed, Clock,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
-import { useI18n, api } from "@/lib/use-i18n";
+import { useI18n, api, assetUrl } from "@/lib/use-i18n";
 import { showStudioError } from "@/components/modules/image-studio";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -586,7 +586,7 @@ export function VideoStudioModule() {
                         </div>
 
                         {scene.status === "COMPLETED" && scene.assetId ? (
-                          <video controls src={`/api/assets/${scene.assetId}/raw`} className="w-full rounded-lg border border-border/60" aria-label={t("studio.vid.scene", { n: scene.order + 1 })} />
+                          <video controls src={assetUrl(`/api/assets/${scene.assetId}/raw`)} className="w-full rounded-lg border border-border/60" aria-label={t("studio.vid.scene", { n: scene.order + 1 })} />
                         ) : (
                           <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-border/60 bg-muted/20">
                             {poll ? (
