@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Clapperboard, Loader2, Plus, ArrowLeft, Film, Play, RotateCcw, Save,
   Wand2, BookOpen, Palette, User, CheckCircle2, XCircle, X, CircleDashed, Clock,
+  FileVideo, Download, Music4, Info, Layers,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api, assetUrl } from "@/lib/use-i18n";
@@ -18,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 const LAST_PROJECT_KEY = "haydev-video-last";
 const BRIEF_FROM_LIB_KEY = "haydev-prompt-to-video";
@@ -30,8 +32,22 @@ interface Project {
   id: string; title: string; durationSec: number; aspectRatio: string; language: string;
   script?: string | null; characterBibleJson?: string | null; styleBibleJson?: string | null;
   status: string; createdAt: string; updatedAt: string; scenes?: Scene[]; _count?: { scenes: number };
+  finalAssetId?: string | null; metaJson?: string | null;
 }
 interface JobInfo { id: string; status: string; error?: string | null }
+interface MusicEdit {
+  volume: number; trimStartSec: number; trimEndSec: number | null;
+  fadeInSec: number; fadeOutSec: number; loop: boolean; duckEnabled: boolean; duckDb: number | null;
+}
+interface MusicItem {
+  id: string; title: string; source: string | null; durationSec: number | null;
+  meta: { edit?: Partial<MusicEdit> };
+  asset: { id: string; url: string; mimeType: string; size: number } | null;
+}
+
+function parseProjectMeta(raw: string | null | undefined): { soundtrack?: { musicAssetId: string; loopOverride: boolean }; assembly?: Record<string, unknown> } {
+  try { return raw ? (JSON.parse(raw) as Record<string, never>) : {}; } catch { return {}; }
+}
 
 type BibleRows = { key: string; value: string }[];
 
@@ -90,6 +106,15 @@ export function VideoStudioModule() {
   const [styleRows, setStyleRows] = useState<BibleRows>([]);
   const [savingBible, setSavingBible] = useState<"char" | "style" | null>(null);
 
+  // final assembly state
+  const [musicList, setMusicList] = useState<MusicItem[]>([]);
+  const [soundtrackId, setSoundtrackId] = useState<string>("");
+  const [loopOverride, setLoopOverride] = useState(false);
+  const [savingTrack, setSavingTrack] = useState(false);
+  const [assembleJob, setAssembleJob] = useState<{ jobId: string; elapsed: number } | null>(null);
+  const assembleJobRef = useRef(assembleJob);
+  assembleJobRef.current = assembleJob;
+
   const loadList = useCallback(async () => {
     try {
       const list = await api<Project[]>("/api/video-projects");
@@ -117,6 +142,15 @@ export function VideoStudioModule() {
     setPolls((prev) => (prev[sceneId] ? prev : { ...prev, [sceneId]: { jobId, elapsed: 0 } }));
   }, []);
 
+  const loadMusic = useCallback(async () => {
+    try {
+      const lib = await api<{ items: MusicItem[] }>("/api/music");
+      setMusicList(lib.items ?? []);
+    } catch {
+      /* music list is optional for assembly — honest empty select */
+    }
+  }, []);
+
   const openProject = useCallback(async (id: string) => {
     try {
       const p = await api<Project>(`/api/video-projects?id=${id}`);
@@ -125,7 +159,11 @@ export function VideoStudioModule() {
       setPromptDrafts({});
       setCharRows(parseBible(p.characterBibleJson));
       setStyleRows(parseBible(p.styleBibleJson));
+      const meta = parseProjectMeta(p.metaJson);
+      setSoundtrackId(meta.soundtrack?.musicAssetId ?? "");
+      setLoopOverride(Boolean(meta.soundtrack?.loopOverride));
       setView("editor");
+      void loadMusic();
       try {
         window.localStorage.setItem(LAST_PROJECT_KEY, id);
       } catch { /* non-critical */ }
@@ -135,7 +173,7 @@ export function VideoStudioModule() {
     } catch (err) {
       showStudioError(t, err);
     }
-  }, [startPoll]);
+  }, [startPoll, loadMusic]);
 
   // hydrate: list + last opened project + library hand-off
   useEffect(() => {
@@ -347,7 +385,91 @@ export function VideoStudioModule() {
   };
 
   const scenes = project?.scenes ?? [];
+  const readyScenes = scenes.filter((s) => s.status === "COMPLETED" && s.assetId);
+  const estVideoDur = scenes.reduce((sum, s) => sum + s.durationSec, 0);
+  const selectedMusic = musicList.find((m) => m.id === soundtrackId) ?? null;
+  const selectedEdit = selectedMusic?.meta?.edit ?? null;
   const estTotal = scenes.reduce((sum, s) => sum + (s.cost ?? (s.status === "COMPLETED" ? 0 : 0.1)), 0);
+
+  const saveSoundtrack = async (musicId: string, loop: boolean) => {
+    if (!project) return;
+    setSavingTrack(true);
+    try {
+      await api<Project>("/api/video-projects", {
+        method: "PATCH",
+        body: JSON.stringify({ projectId: project.id, soundtrack: musicId ? { musicAssetId: musicId, loopOverride: loop } : null }),
+      });
+      toast.success(t("studio.vid.assembly.trackSaved"));
+    } catch (err) {
+      showStudioError(t, err);
+    } finally {
+      setSavingTrack(false);
+    }
+  };
+
+  const changeSoundtrack = (musicId: string) => {
+    const id = musicId === "none" ? "" : musicId;
+    setSoundtrackId(id);
+    const item = musicList.find((m) => m.id === id);
+    setLoopOverride(Boolean(item?.meta?.edit?.loop));
+    void saveSoundtrack(id, Boolean(item?.meta?.edit?.loop));
+  };
+
+  const toggleLoop = (checked: boolean) => {
+    setLoopOverride(checked);
+    void saveSoundtrack(soundtrackId, checked);
+  };
+
+  const startAssembly = async () => {
+    if (!project) return;
+    pulseCore("GENERATING");
+    try {
+      const res = await api<{ jobId: string }>("/api/generate/video", {
+        method: "POST",
+        body: JSON.stringify({ action: "assemble_project", projectId: project.id }),
+      });
+      setAssembleJob({ jobId: res.jobId, elapsed: 0 });
+    } catch (err) {
+      pulseCore("ERROR");
+      showStudioError(t, err);
+    }
+  };
+
+  // assembly job polling: 3s — ffmpeg runs server-side in the durable ASSEMBLE job.
+  // Depends on the boolean, NOT the object: the elapsed counter rewrites the object
+  // every second, and an object identity dependency would reset this 3s interval
+  // before it ever fires (discovered in browser QA — polls never ran).
+  const assembleActive = Boolean(assembleJob);
+  useEffect(() => {
+    if (!assembleActive) return;
+    const iv = setInterval(async () => {
+      const cur = assembleJobRef.current;
+      if (!cur) return;
+      try {
+        const job = await api<JobInfo>(`/api/jobs/${cur.jobId}`);
+        if (job.status === "COMPLETED") {
+          setAssembleJob(null);
+          await refreshProject();
+          pulseCore("SUCCESS");
+          toast.success(t("studio.vid.assembly.done"));
+        } else if (["FAILED", "CANCELLED", "NEEDS_USER_ACTION"].includes(job.status)) {
+          setAssembleJob(null);
+          pulseCore("ERROR");
+          toast.error(t("studio.err.generic", { msg: job.error ?? "assembly failed" }));
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [assembleActive, refreshProject, t]);
+
+  // assembly elapsed counter
+  useEffect(() => {
+    if (!assembleActive) return;
+    const iv = setInterval(() => setAssembleJob((prev) => (prev ? { ...prev, elapsed: prev.elapsed + 1 } : prev)), 1000);
+    return () => clearInterval(iv);
+  }, [assembleActive]);
 
   const statusBadge = (status: string) => {
     const map: Record<string, string> = {
@@ -363,7 +485,9 @@ export function VideoStudioModule() {
   };
 
   return (
-    <div className="grid gap-5">
+    // grid-cols-1 (minmax(0,1fr)) — без неё implicit track растягивается под
+    // max-content горизонтального стрипа сцен и ломает mobile-layout
+    <div className="grid grid-cols-1 gap-5">
       <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -650,6 +774,129 @@ export function VideoStudioModule() {
                     );
                   })}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* final assembly */}
+          <Card className="glass-strong neon-border rounded-2xl">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <FileVideo className="h-4 w-4 text-[var(--neon)]" /> {t("studio.vid.assembly.title")}
+                <Badge variant="outline" className={`text-[10px] ${readyScenes.length > 0 ? "border-[var(--neon-2)]/50 text-[var(--neon-2)]" : "text-muted-foreground"}`}>
+                  {t("studio.vid.assembly.ready", { ready: readyScenes.length, total: scenes.length })}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {/* soundtrack picker */}
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end sm:gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="vid-track" className="flex items-center gap-1.5">
+                    <Music4 className="h-3.5 w-3.5 text-[var(--neon-3)]" /> {t("studio.vid.assembly.soundtrack")}
+                  </Label>
+                  <Select value={soundtrackId} onValueChange={changeSoundtrack}>
+                    <SelectTrigger id="vid-track" className="min-h-11 w-full">
+                      <SelectValue placeholder={t("studio.vid.assembly.soundtrackNone")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{t("studio.vid.assembly.soundtrackNone")}</SelectItem>
+                      {musicList.map((m) => (
+                        <SelectItem key={m.id} value={m.id} disabled={!m.asset}>
+                          {m.title}
+                          {m.durationSec ? ` · ${Math.round(m.durationSec)}s` : ""}
+                          {!m.asset ? ` · ${t("studio.vid.assembly.lyricsOnly")}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {selectedMusic && (
+                  <div className="flex items-center gap-2 pb-1">
+                    <Switch id="vid-loop" checked={loopOverride} onCheckedChange={toggleLoop} disabled={savingTrack} />
+                    <Label htmlFor="vid-loop" className="text-xs text-muted-foreground">{t("studio.vid.assembly.loop")}</Label>
+                  </div>
+                )}
+              </div>
+
+              {/* applied edit-intents (§20) — honest: these are applied by ffmpeg at assembly time */}
+              {selectedEdit && selectedMusic?.asset && (
+                <div className="grid gap-1.5">
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedEdit.volume !== undefined && selectedEdit.volume !== 1 && (
+                      <Badge variant="outline" className="text-[10px]">vol ×{selectedEdit.volume}</Badge>
+                    )}
+                    {Boolean(selectedEdit.trimStartSec || selectedEdit.trimEndSec) && (
+                      <Badge variant="outline" className="text-[10px]">trim {selectedEdit.trimStartSec ?? 0}–{selectedEdit.trimEndSec ?? "∞"}s</Badge>
+                    )}
+                    {Boolean(selectedEdit.fadeInSec) && <Badge variant="outline" className="text-[10px]">fade-in {selectedEdit.fadeInSec}s</Badge>}
+                    {Boolean(selectedEdit.fadeOutSec) && <Badge variant="outline" className="text-[10px]">fade-out {selectedEdit.fadeOutSec}s</Badge>}
+                    {loopOverride && <Badge variant="outline" className="text-[10px]">loop</Badge>}
+                    {selectedEdit.duckEnabled && <Badge variant="outline" className="text-[10px] text-muted-foreground">duck ⏸</Badge>}
+                  </div>
+                  <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                    <Info className="mt-0.5 h-3 w-3 shrink-0 text-[var(--neon-2)]" />
+                    {t("studio.vid.assembly.chipsNote")}
+                  </p>
+                  {selectedEdit.duckEnabled && (
+                    <p className="text-[11px] text-muted-foreground">{t("studio.vid.assembly.duckNote")}</p>
+                  )}
+                  {!loopOverride && selectedMusic.durationSec != null && selectedMusic.durationSec < estVideoDur && (
+                    <p className="text-[11px] text-amber-500">{t("studio.vid.assembly.shortHint", { music: Math.round(selectedMusic.durationSec), video: Math.round(estVideoDur) })}</p>
+                  )}
+                </div>
+              )}
+              {!soundtrackId && (
+                <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                  <Info className="mt-0.5 h-3 w-3 shrink-0" /> {t("studio.vid.assembly.silentNote")}
+                </p>
+              )}
+
+              {/* readiness + action */}
+              <div className="grid gap-2">
+                {readyScenes.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t("studio.vid.assembly.noScenes")}</p>
+                ) : readyScenes.length < scenes.length ? (
+                  <p className="text-sm text-amber-500">{t("studio.vid.assembly.skipNote", { ready: readyScenes.length, total: scenes.length, pending: scenes.length - readyScenes.length })}</p>
+                ) : null}
+                {assembleJob ? (
+                  <Button variant="outline" size="lg" className="min-h-11 gap-2" disabled>
+                    <Loader2 className="h-4 w-4 animate-spin text-[var(--neon)]" />
+                    {t("studio.vid.assembly.assembling", { sec: assembleJob.elapsed })}
+                  </Button>
+                ) : (
+                  <Button size="lg" className="min-h-11 gap-2 font-semibold" disabled={readyScenes.length === 0} onClick={startAssembly}>
+                    <Layers className="h-4 w-4" />
+                    {project?.finalAssetId ? t("studio.vid.assembly.reassemble") : t("studio.vid.assembly.assemble")}
+                  </Button>
+                )}
+              </div>
+
+              {/* final result */}
+              {project?.finalAssetId ? (
+                <div className="grid gap-2 rounded-xl border border-border/60 bg-muted/10 p-3">
+                  <p className="flex items-center gap-1.5 text-sm font-medium">
+                    <CheckCircle2 className="h-4 w-4 text-[var(--neon-2)]" /> {t("studio.vid.assembly.final")}
+                  </p>
+                  <video
+                    controls
+                    src={assetUrl(`/api/assets/${project.finalAssetId}/raw`)}
+                    className="mx-auto w-full max-w-xs rounded-lg border border-border/60"
+                    aria-label={t("studio.vid.assembly.final")}
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">{project.aspectRatio} · 30fps · h264+aac</p>
+                    <a
+                      href={assetUrl(`/api/assets/${project.finalAssetId}/raw`)}
+                      download
+                      className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border/60 px-3 text-xs transition hover:bg-muted/40"
+                    >
+                      <Download className="h-3.5 w-3.5 text-[var(--neon)]" /> {t("studio.vid.assembly.download")}
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">{t("studio.vid.assembly.finalEmpty")}</p>
               )}
             </CardContent>
           </Card>

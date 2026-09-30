@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
 //   { projectId, sceneId, prompt }            → edit scene prompt
 //   { projectId, sceneId, reset: true }       → reset COMPLETED/FAILED scene for regeneration (version+1)
 //   { projectId, scenes: [{id, order}] }      → reorder scenes
+//   { projectId, soundtrack: {musicAssetId, loopOverride?} | null } → soundtrack for final assembly
 //   { projectId, title?, script?, characterBible?, styleBible? } → project-level fields (bibles as plain objects)
 export async function PATCH(req: NextRequest) {
   return handle(async () => {
@@ -81,6 +82,35 @@ export async function PATCH(req: NextRequest) {
           })
         )
       );
+    }
+
+    // Soundtrack selection (validated ownership; edit-intents live on the MusicAsset)
+    if (body.soundtrack !== undefined) {
+      let track: { musicAssetId: string; loopOverride: boolean } | null = null;
+      if (body.soundtrack && typeof body.soundtrack === "object") {
+        const musicAssetId = String((body.soundtrack as { musicAssetId?: unknown }).musicAssetId ?? "");
+        const entry = musicAssetId
+          ? await db.musicAsset.findFirst({ where: { id: musicAssetId, userId: user.id } })
+          : null;
+        if (!entry) throw new ApiError(404, "MUSIC_NOT_FOUND", "Music entry not found");
+        if (!entry.assetId) throw new ApiError(409, "MUSIC_NO_AUDIO", "This entry has no audio file (lyrics-only) — pick a rendered track");
+        track = { musicAssetId: entry.id, loopOverride: Boolean((body.soundtrack as { loopOverride?: unknown }).loopOverride) };
+      }
+      let meta: Record<string, unknown> = {};
+      try { meta = project.metaJson ? (JSON.parse(project.metaJson) as Record<string, unknown>) : {}; } catch { /* rebuild meta */ }
+      if (track) meta.soundtrack = track;
+      else delete meta.soundtrack;
+      await db.videoProject.update({
+        where: { id: project.id },
+        data: { metaJson: JSON.stringify(meta) },
+      });
+      await audit.log({
+        userId: user.id,
+        action: "video.soundtrack_set",
+        objectType: "VideoProject",
+        objectId: project.id,
+        summary: track ? `Soundtrack: ${track.musicAssetId}, loop=${track.loopOverride}` : "Soundtrack cleared",
+      });
     }
 
     // Project-level fields

@@ -9,6 +9,7 @@ export type JobKind =
   | "LLM"
   | "IMAGE"
   | "VIDEO"
+  | "ASSEMBLE"
   | "TTS"
   | "MUSIC"
   | "TRANSCRIPTION"

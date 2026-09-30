@@ -197,6 +197,17 @@ const VIDEO_SIZE: Record<string, string> = {
   "1:1": "1024x1024",
 };
 
+// Provider contract: only these clip lengths are accepted (API rejects others
+// with "unsupported duration"). Shot plans are snapped to the nearest value.
+export const SUPPORTED_VIDEO_DURATIONS = [5, 10];
+
+export function snapVideoDuration(sec: number): number {
+  const n = Math.max(1, Math.round(Number(sec) || 5));
+  return SUPPORTED_VIDEO_DURATIONS.reduce((best, d) =>
+    Math.abs(d - n) < Math.abs(best - n) ? d : best,
+  );
+}
+
 export async function videoSubmit(opts: {
   prompt: string;
   aspectRatio?: string;
@@ -208,7 +219,7 @@ export async function videoSubmit(opts: {
   const res = await zai.video.generations.create({
     prompt: opts.prompt.slice(0, 1500),
     size,
-    duration: Math.min(opts.durationSec ?? 5, 10),
+    duration: snapVideoDuration(opts.durationSec ?? 5),
     with_audio: false,
     watermark_enabled: false,
   });

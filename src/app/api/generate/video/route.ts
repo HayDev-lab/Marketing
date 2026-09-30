@@ -5,7 +5,8 @@ import { audit, ledger } from "@/lib/ledger";
 import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
-import { videoSubmit, llmCompleteJson } from "@/lib/ai/zai";
+import { videoSubmit, llmCompleteJson, snapVideoDuration } from "@/lib/ai/zai";
+import { kickAssembly } from "@/lib/video/assemble";
 
 // POST /api/generate/video — create/extend VideoProject, submit ONE scene to async provider.
 // Long-running: job goes WAITING_PROVIDER; client polls /api/jobs/[id] (reconciliation, resume).
@@ -55,12 +56,18 @@ export async function POST(req: NextRequest) {
       const continuityContext = Object.keys(characterBible).length || Object.keys(styleBible).length
         ? `\n\nCharacter Bible: ${JSON.stringify(characterBible)}\nStyle Bible: ${JSON.stringify(styleBible)}`
         : "";
+      // Snap the scene to a provider-supported clip length; keep the row honest
+      // (the stored duration must equal the clip the provider actually renders).
+      const submitDuration = snapVideoDuration(scene.durationSec);
+      if (submitDuration !== scene.durationSec) {
+        await db.videoScene.update({ where: { id: scene.id }, data: { durationSec: submitDuration } });
+      }
       await jobs.markProcessing(job.id);
       try {
         const submitted = await videoSubmit({
           prompt: scene.prompt + continuityContext,
           aspectRatio: project.aspectRatio,
-          durationSec: scene.durationSec,
+          durationSec: submitDuration,
         });
         await jobs.markSubmitted(job.id, submitted.providerJobId);
         await db.videoScene.update({
@@ -115,7 +122,8 @@ export async function POST(req: NextRequest) {
             data: {
               projectId: project.id,
               order: order++,
-              durationSec: Math.min(10, Math.max(4, durationSec / Math.max(1, beats.length))),
+              // snap to a provider-supported clip length (5s/10s)
+              durationSec: snapVideoDuration(durationSec / Math.max(1, beats.length)),
               prompt: String(beat.prompt).slice(0, 2000),
               narration: beat.narration ? String(beat.narration).slice(0, 1000) : null,
               status: "PENDING",
@@ -149,6 +157,38 @@ export async function POST(req: NextRequest) {
         },
       });
       return ok(updated);
+    }
+
+    // ---- Final assembly: durable ASSEMBLE job, local FFmpeg mixdown (REAL video out) ----
+    if (action === "assemble_project") {
+      const projectId = String(body.projectId ?? "");
+      const project = await db.videoProject.findUnique({ where: { id: projectId }, include: { scenes: true } });
+      if (!project || project.userId !== user.id) throw new ApiError(404, "NOT_FOUND", "Project not found");
+      const readyCount = project.scenes.filter((s) => s.status === "COMPLETED" && s.assetId).length;
+      if (project.scenes.length === 0 || readyCount === 0) {
+        throw new ApiError(409, "NO_SCENES", "No generated scenes to assemble — generate at least one scene first");
+      }
+      // Honest idempotency: a completed assembly for the same project fingerprint re-runs
+      // deliberately (user may have picked a new soundtrack), so the key carries a revision.
+      const stamp = `${readyCount}:${project.scenes.length}:${Date.now()}`;
+      const { job } = await jobs.create({
+        userId: user.id,
+        kind: "ASSEMBLE",
+        provider: "ffmpeg-local",
+        model: "h264-aac",
+        input: { projectId: project.id },
+        idempotencyKey: `assemble:${project.id}:${stamp}`,
+        maxAttempts: 1,
+      });
+      await audit.log({
+        userId: user.id,
+        action: "video.assemble_submit",
+        objectType: "VideoProject",
+        objectId: project.id,
+        summary: `Assembly queued (${readyCount}/${project.scenes.length} scenes ready)`,
+      });
+      kickAssembly(job.id);
+      return ok({ jobId: job.id }, 202);
     }
 
     throw new ApiError(400, "BAD_ACTION", "Unknown action");

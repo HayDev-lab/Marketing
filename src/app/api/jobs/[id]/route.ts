@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { ok, handle, ApiError, requireUser } from "@/lib/api";
 import { jobs } from "@/lib/jobs";
+import { kickAssembly } from "@/lib/video/assemble";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -40,7 +41,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     const { id } = await params;
     const body = await req.json();
     if (body.action === "resume") {
+      const existing = await jobs.getForUser(id, user.id);
       const job = await jobs.resume(id, user.id);
+      // ASSEMBLE jobs run locally — resume re-kicks the ffmpeg runner (durable, recoverable).
+      if (existing.kind === "ASSEMBLE" && job && ["QUEUED", "RETRYING", "PROCESSING"].includes(job.status)) {
+        kickAssembly(job.id);
+      }
       return ok(job);
     }
     if (body.action === "cancel") {
