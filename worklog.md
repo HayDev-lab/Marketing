@@ -475,3 +475,27 @@ Stage Summary:
 - Безопасность: токен одноразовый (переиспользование отклоняется), хранится только SHA-256 хэш, 30-мин expiry, все сессии аккаунта инвалидируются при сбросе, rate-limit на обоих endpoints, полный аудит. dev_inline помечен явно — в проде с SMTP ветка заменяется на email-отправку (switch уже структурирован).
 - Риски: при утечке URL в логах/реферерах в dev-режиме токен мог бы быть виден — приемлемо для песочницы, в проде убрать dev_inline. Локальные 401 от locale persist больше не шумят (клиент), но сервер их всё ещё логирует (косметика).
 - Next: тренд-движок Round 11 (TrendSignal/TrendAdaptation модели, SIGNAL RADAR) остаётся главным треком; candidates — email-провайдер абстракция для production reset, session management UI (список активных сессий), 2FA-заготовка.
+
+---
+Task ID: 17 (incident: «восстанови все!» — платформа 500)
+Agent: Z.ai Code (main)
+Task: Пользователь сообщил «восстанови все!». Обнаружен полный отказ платформы (HTTP 500 на все GET /). Восстановление сервера + радикальное лечение корневой причины + проверка целостности данных.
+
+Work Log:
+- ДИАГНОЗ: все запросы GET / → 500 за 24-37мс. В dev.log — Turbopack resolver crash: «Error while looking up import map: next/font/google queries have exactly one entry» ×N. Причина: повреждён кэш Turbopack для next/font/google после множества HMR-пересборок (Fast Refresh циклов) — известный класс сбоев Turbopack font-resolver.
+- ВОССТАНОВЛЕНИЕ: kill next dev → rm -rf .next → setsid bun run dev → 200 за 3.3с (Google Fonts в этот момент доступны).
+- РАДИКАЛЬНЫЙ ФИКС (защита от рецидива — compile-time зависимость от Google убрана ПОЛНОСТЬЮ):
+  - SELF-HOSTING: скачаны 5 variable-woff2 (Geist latin+cyrillic, Geist Mono latin, Noto Sans Armenian armenian+latin) в public/fonts/ (~125KB суммарно).
+  - src/app/fonts.css (НОВЫЙ): 5 @font-face с font-display:swap и точными unicode-range из Google CSS — подмножества грузятся лениво и только когда нужны.
+  - layout.tsx: next/font/google импорты и 3 const УДАЛЕНЫ; body className без .variable классов.
+  - globals.css: @import "./fonts.css"; --font-sans/--font-mono теперь ЛИТЕРАЛЬНЫЕ стеки (никогда не резолвятся в пустоту); в @layer base добавлено явное html{font-family:"Geist","Noto Sans Armenian",...} + body{font-family:inherit}.
+  - БАГ-УРОК: фоновые curl (A & B & wait) не унаследовали cd → 4 из 5 woff2 легли в корень проекта → 404 → font error в FontFaceSet. ФИКС: mv в public/fonts/ → все 5 URLs 200.
+- ВЕРИФИКАЦИЯ ШРИФТОВ (browser): document.fonts.ready → Geist:loaded ×2, Noto Sans Armenian:loaded; fonts.check('16px "Noto Sans Armenian"','Հայ')=true; computed font-family на html/body/h1 = «Geist, Noto Sans Armenian…». Скриншоты: hero «ՀայDev Marketing» и дашборд «Բարի երեկո, QA4 Reviewer» в фирменной типографике (ранее — системный fallback: @theme inline НЕ эмитил --font-sans в :root, preflight падал в ui-sans-serif — это деградация была и до падения сервера).
+- ЦЕЛОСТНОСТЬ ДАННЫХ (raw SQL): 4 юзера (owner/pilot/qa3/qa4) целы; ContentItem 53, GenerationJob 44, PromptTemplate 200, MediaAsset 8, MarketingPlan 1, AuditLog 159, сессии 16 — НИЧЕГО не потеряно.
+- E2E ФИНАЛ: demo-вход → дашборд (13 nav-кнопок) → онбординг-тур (9 точек видны после контраст-фикса) → dismiss → консоль 0 ошибок; lint 0; tsc src/ 0; повторные GET / — 200.
+
+Stage Summary:
+- Платформа полностью восстановлена и стала УСТОЙЧИВЕЕ, чем была: (1) падение класса «Turbopack next/font/google crash» больше невозможно — Google-зависимость на compile-time удалена; (2) шрифты самохостятся, работают офлайн, грузятся по unicode-range; (3) найдена и исправлена скрытая деградация типографики (армянский текст рендерился системным шрифтом — теперь фирменный Noto Sans Armenian).
+- Данные всех аккаунтов целы (проверено SQL-подсчётом всех ключевых таблиц).
+- Риски: файлы в public/fonts должны оставаться в репо (добавить в git); если понадобится расширить подмножества (напр. Geist Mono cyrillic) — скачать доп. woff2 и добавить @font-face по образцу.
+- Next: Round 11 Trend Engine (TrendSignal/TrendAdaptation, SIGNAL RADAR) — главный трек; дополнительно建议 git add public/fonts.
