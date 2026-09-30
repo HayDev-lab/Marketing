@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Settings2, Bot, ScrollText, Wallet, RefreshCw, Loader2, Activity,
-  ShieldCheck, ShieldAlert, ShieldX, CircleHelp, Zap, Sparkles, CheckCircle2, TriangleAlert, ListChecks, Eye,
+  ShieldCheck, ShieldAlert, ShieldX, CircleHelp, Zap, Sparkles, CheckCircle2, TriangleAlert, ListChecks, Eye, Radar,
 } from "lucide-react";
 
 // ===== types =====
@@ -38,9 +38,12 @@ interface Provider {
 interface Policy {
   enabled: boolean; trendDiscovery: boolean; autoPlanning: boolean; autoGeneration: boolean;
   paidGeneration: boolean; autoScheduling: boolean; autoPublishing: boolean; humanApproval: boolean;
+  allowImageGeneration: boolean; allowVideoGeneration: boolean;
   platformsJson: string | null; languagesJson: string | null; forbiddenTopicsJson: string | null; forbiddenClaimsJson: string | null;
+  marketsJson: string | null; keywordsJson: string | null;
   dailyBudget: number; weeklyBudget: number; monthlyBudget: number; maxGenerationCost: number;
   maxRetries: number; maxContentPerDay: number; minQualityThreshold: number;
+  minimumRelevance: number; minimumConfidence: number; searchFrequencyHours: number; maxSignalsPerRun: number;
 }
 
 interface AuditLog {
@@ -87,7 +90,7 @@ function statusIcon(status: ProviderStatus) {
 }
 
 const CATEGORY_ORDER = ["LLM", "Research", "Image", "Video", "TTS", "VoiceClone", "Music", "Avatar", "Transcription", "Publishing"];
-const POLICY_BOOLEANS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval"] as const;
+const POLICY_BOOLEANS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration"] as const;
 const PLATFORM_CHIPS = ["instagram", "tiktok", "facebook", "telegram"];
 const LANG_CHIPS = ["hy", "ru", "en"];
 const ACTOR_FILTERS = ["ALL", "WEB_UI", "MCP", "AUTOPILOT", "SYSTEM"] as const;
@@ -269,8 +272,11 @@ function AutopilotTab() {
   const [languages, setLanguages] = useState<string[]>([]);
   const [forbiddenTopics, setForbiddenTopics] = useState("");
   const [forbiddenClaims, setForbiddenClaims] = useState("");
+  const [markets, setMarkets] = useState("");
+  const [keywords, setKeywords] = useState("");
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [trendRunning, setTrendRunning] = useState(false);
   const [brands, setBrands] = useState<BrandLite[]>([]);
   const [brandId, setBrandId] = useState("");
   const [result, setResult] = useState<CycleResult | null>(null);
@@ -284,6 +290,8 @@ function AutopilotTab() {
       setLanguages(parseArr(data.policy.languagesJson));
       setForbiddenTopics(parseArr(data.policy.forbiddenTopicsJson).join(", "));
       setForbiddenClaims(parseArr(data.policy.forbiddenClaimsJson).join(", "));
+      setMarkets(parseArr(data.policy.marketsJson).join(", "));
+      setKeywords(parseArr(data.policy.keywordsJson).join(", "));
     } catch {
       // honest empty state
     }
@@ -310,6 +318,8 @@ function AutopilotTab() {
         languages,
         forbiddenTopics: forbiddenTopics.split(",").map((s) => s.trim()).filter(Boolean),
         forbiddenClaims: forbiddenClaims.split(",").map((s) => s.trim()).filter(Boolean),
+        markets: markets.split(",").map((s) => s.trim()).filter(Boolean),
+        keywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
       };
       for (const b of POLICY_BOOLEANS) body[b] = policy[b];
       body.dailyBudget = Number(policy.dailyBudget) || 0;
@@ -319,6 +329,10 @@ function AutopilotTab() {
       body.maxRetries = Math.max(0, Math.floor(Number(policy.maxRetries) || 0));
       body.maxContentPerDay = Math.max(0, Math.floor(Number(policy.maxContentPerDay) || 0));
       body.minQualityThreshold = Math.min(1, Math.max(0, Number(policy.minQualityThreshold) || 0));
+      body.minimumRelevance = Math.min(1, Math.max(0, Number(policy.minimumRelevance) || 0));
+      body.minimumConfidence = Math.min(1, Math.max(0, Number(policy.minimumConfidence) || 0));
+      body.searchFrequencyHours = Math.max(1, Math.floor(Number(policy.searchFrequencyHours) || 24));
+      body.maxSignalsPerRun = Math.max(1, Math.floor(Number(policy.maxSignalsPerRun) || 5));
       await api("/api/autopilot", { method: "PATCH", body: JSON.stringify(body) });
       toast.success(t("autopilot.saved"));
       await load();
@@ -344,6 +358,19 @@ function AutopilotTab() {
       toast.error(code === "AUTOPILOT_DISABLED" ? t("autopilot.err.AUTOPILOT_DISABLED") : code === "BRAND_NOT_ALLOWED" ? t("autopilot.err.BRAND_NOT_ALLOWED") : t("autopilot.err.default"), { description: (e as Error).message });
     } finally {
       setRunning(false);
+    }
+  };
+
+  const runTrendSearch = async () => {
+    setTrendRunning(true);
+    try {
+      const res = await api<{ jobId: string; deduplicated: boolean; policy: { topic: string; market: string } }>("/api/autopilot/trend-search", { method: "POST" });
+      toast.success(res.deduplicated ? t("autopilot.trendDedup") : t("autopilot.trendStarted", { topic: res.policy.topic, market: res.policy.market }));
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      toast.error(code ? t("autopilot.err.default") : t("autopilot.err.default"), { description: (e as Error).message });
+    } finally {
+      setTrendRunning(false);
     }
   };
 
@@ -390,6 +417,34 @@ function AutopilotTab() {
               </div>
             ))}
           </div>
+
+          {/* trend autopilot */}
+          <section aria-label={t("autopilot.trendSection")} className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("autopilot.trendSection")}</h3>
+              <Button size="sm" variant="outline" className="min-h-11 gap-1.5" disabled={trendRunning} onClick={runTrendSearch} aria-label={t("autopilot.trendRunNow")}>
+                {trendRunning ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Radar className="h-4 w-4 text-[var(--neon-2)]" aria-hidden />}
+                {trendRunning ? t("autopilot.trendStarting") : t("autopilot.trendRunNow")}
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{t("autopilot.trendNote")}</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="ap-markets" className="text-xs">{t("autopilot.markets")}</Label>
+                <Input id="ap-markets" className="min-h-11" value={markets} onChange={(e) => setMarkets(e.target.value)} placeholder="Armenia, Georgia" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="ap-keywords" className="text-xs">{t("autopilot.keywords")}</Label>
+                <Input id="ap-keywords" className="min-h-11" value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="coffee, yerevan cafes" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {numField("ap-minrel", t("autopilot.minimumRelevance"), policy.minimumRelevance, (v) => setPolicy({ ...policy, minimumRelevance: v }), "0.05")}
+              {numField("ap-minconf", t("autopilot.minimumConfidence"), policy.minimumConfidence, (v) => setPolicy({ ...policy, minimumConfidence: v }), "0.05")}
+              {numField("ap-freq", t("autopilot.searchFrequency"), policy.searchFrequencyHours, (v) => setPolicy({ ...policy, searchFrequencyHours: v }))}
+              {numField("ap-maxsig", t("autopilot.maxSignals"), policy.maxSignalsPerRun, (v) => setPolicy({ ...policy, maxSignalsPerRun: v }))}
+            </div>
+          </section>
 
           {/* budgets */}
           <section aria-label={t("autopilot.budgets")} className="grid gap-3">

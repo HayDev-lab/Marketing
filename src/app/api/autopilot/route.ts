@@ -4,7 +4,7 @@ import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit, ledger } from "@/lib/ledger";
 import { llmCompleteJson, webSearch } from "@/lib/ai/zai";
 
-const BOOL_KEYS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval"] as const;
+const BOOL_KEYS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration"] as const;
 
 // GET /api/autopilot — policy + last cycle results
 export async function GET() {
@@ -32,10 +32,13 @@ export async function PATCH(req: NextRequest) {
     for (const k of ["dailyBudget", "weeklyBudget", "monthlyBudget", "maxGenerationCost", "minQualityThreshold"] as const) {
       if (typeof body[k] === "number") data[k] = Math.max(0, body[k]);
     }
-    for (const k of ["maxRetries", "maxContentPerDay"] as const) {
+    for (const k of ["maxRetries", "maxContentPerDay", "searchFrequencyHours", "maxSignalsPerRun"] as const) {
       if (typeof body[k] === "number") data[k] = Math.max(0, Math.floor(body[k]));
     }
-    for (const k of ["platformsJson", "brandsJson", "languagesJson", "postingWindowsJson", "forbiddenTopicsJson", "forbiddenClaimsJson"] as const) {
+    for (const k of ["minimumRelevance", "minimumConfidence"] as const) {
+      if (typeof body[k] === "number") data[k] = Math.min(1, Math.max(0, body[k]));
+    }
+    for (const k of ["platformsJson", "brandsJson", "languagesJson", "postingWindowsJson", "forbiddenTopicsJson", "forbiddenClaimsJson", "marketsJson", "keywordsJson"] as const) {
       const short = k.replace("Json", "");
       if (Array.isArray(body[short])) data[k] = JSON.stringify(body[short]);
     }

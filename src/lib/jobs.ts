@@ -38,10 +38,20 @@ function hashInput(obj: unknown): string {
 export const jobs = {
   async create(input: CreateJobInput) {
     const inputHash = hashInput(input.input);
-    // Idempotency: same key returns existing job (no duplicate paid work)
+    // Idempotency: an ACTIVE job with the same key is rejoined (no duplicate
+    // paid work). A TERMINAL job (completed/failed/cancelled) with the same
+    // fingerprint never blocks a deliberate re-run — the new job gets a
+    // derived key; downstream trend dedupKey collapsing keeps data clean.
     if (input.idempotencyKey) {
       const existing = await db.generationJob.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-      if (existing) return { job: existing, deduplicated: true };
+      const ACTIVE = ["DRAFT", "QUEUED", "SUBMITTED", "PROCESSING", "WAITING_PROVIDER", "RETRYING"];
+      if (existing && ACTIVE.includes(existing.status)) return { job: existing, deduplicated: true };
+      if (existing) {
+        const siblings = await db.generationJob.count({
+          where: { idempotencyKey: { startsWith: `${input.idempotencyKey}#r` } },
+        });
+        input = { ...input, idempotencyKey: `${input.idempotencyKey}#r${siblings + 1}` };
+      }
     }
     const job = await db.generationJob.create({
       data: {

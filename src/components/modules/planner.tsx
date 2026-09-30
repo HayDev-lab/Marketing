@@ -71,7 +71,7 @@ interface WeeklyRow { day: string; platform: string; pillar: string; format: str
 interface Kpi { name: string; target: string }
 interface Campaign { name: string; concept: string; platform: string }
 // durable background batch job (client-side view of GenerationJob kind=CONTENT_BATCH)
-interface BatchRun { jobId: string; planId: string; done: number; total: number }
+interface BatchRun { jobId: string; planId?: string; done: number; total: number }
 interface JobDto { id: string; kind: string; status: string; inputJson: string | null; outputJson: string | null; checkpointJson: string | null; createdAt: string }
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {

@@ -39,6 +39,7 @@ model User {
   publishingConns    PublishingConnection[]
   scheduledPosts     ScheduledPost[]
   promptTemplates    PromptTemplate[]
+  trendAdaptations   TrendAdaptation[]
   mcpTokens          McpToken[]
   analyticsSnapshots AnalyticsSnapshot[]
   insights           LearningInsight[]
@@ -80,6 +81,7 @@ model Brand {
   contentPlans   ContentPlan[]
   contentItems   ContentItem[]
   trends         Trend[]
+  trendAdaptations TrendAdaptation[]
   videoProjects  VideoProject[]
   imageGens      ImageGeneration[]
   musicAssets    MusicAsset[]
@@ -162,8 +164,20 @@ model Trend {
   language            String?
   evidence            String?   // JSON array of evidence quotes
   metricsJson         String?
-  status              String    @default("HYPOTHESIS") // VERIFIED_TREND | POPULAR_TOPIC | EMERGING_SIGNAL | HYPOTHESIS
+  status              String    @default("HYPOTHESIS") // VERIFIED_TREND | POPULAR_TOPIC | EMERGING_SIGNAL | CONTENT_OPPORTUNITY | HYPOTHESIS
   confidence          Float     @default(0.5)
+  // Trend Intelligence extensions (Round 11)
+  sourceType          String?   // web_search | rss | manual | llm_hypothesis
+  sourcePublishedAt   DateTime?
+  discoveredAt        DateTime  @default(now())
+  country             String?   // normalized market/country (region stays free-form)
+  category            String?   // product | culture | tech | entertainment | ...
+  keywordsJson        String?   // JSON array
+  hashtagsJson        String?   // JSON array
+  relevanceScore      Float?    // 0..1 market-level relevance (brandFitScore stays brand-specific)
+  freshnessScore      Float?    // 0..1 recency decay
+  dedupKey            String?   // normalized fingerprint: same story from different sources collapses
+  jobId               String?   // originating TREND_SEARCH GenerationJob
   brandFitScore       Float?
   brandFitReason      String?
   suggestedAdaptation String?
@@ -172,6 +186,41 @@ model Trend {
   hook                String?
   script              String?
   createdAt           DateTime  @default(now())
+
+  adaptations TrendAdaptation[]
+
+  @@index([userId, dedupKey])
+  @@index([userId, status])
+}
+
+// Structured "Adapt to my business" output — one per (trend × brand × intent)
+model TrendAdaptation {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trendId            String
+  trend              Trend    @relation(fields: [trendId], references: [id], onDelete: Cascade)
+  brandId            String?
+  brand              Brand?   @relation(fields: [brandId], references: [id])
+  platform           String
+  contentType        String   // POST | IMAGE_POST | VIDEO_REEL | STORY | CAROUSEL
+  audience           String?
+  hook               String?
+  angle              String?
+  concept            String?
+  cta                String?
+  creativeBrief      String?
+  scriptOutline      String?
+  visualDirection    String?
+  captionIdea        String?
+  recommendedPlatform String?
+  generationPrompt   String?  // compiled via prompt compiler — provider-specific
+  generationProvider String?  // e.g. zai-image | future: veo, flux, kling
+  templateId         String?  // PromptTemplate used as base, if any
+  language           String?
+  status             String   @default("READY") // READY | USED
+  usedContentItemId  String?
+  createdAt          DateTime @default(now())
 }
 
 // ============ PLANNING ============
@@ -527,6 +576,15 @@ model AutopilotPolicy {
   forbiddenTopicsJson   String  @default("[]")
   forbiddenClaimsJson   String  @default("[]")
   minQualityThreshold   Float   @default(0.6)
+  // Trend autopilot (Round 11)
+  marketsJson           String  @default("[]")   // country/market list for trend discovery
+  keywordsJson          String  @default("[]")   // topic keywords for trend discovery
+  minimumRelevance      Float   @default(0.55)
+  minimumConfidence     Float   @default(0.5)
+  searchFrequencyHours  Int     @default(24)
+  maxSignalsPerRun      Int     @default(5)
+  allowImageGeneration  Boolean @default(false)
+  allowVideoGeneration  Boolean @default(false)
   updatedAt             DateTime @updatedAt
 }
 

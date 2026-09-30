@@ -31,10 +31,46 @@ export async function POST(req: NextRequest) {
     const language = ["hy", "ru", "en"].includes(body.language) ? body.language : "hy";
     const contentType = ["IMAGE_POST", "VIDEO_REEL", "STORY", "CAROUSEL", "POST"].includes(body.contentType) ? body.contentType : "IMAGE_POST";
 
+    // Trend→Draft bridge: a structured TrendAdaptation can seed the whole draft
+    let adaptation: null | {
+      id: string; trendId: string; platform: string; contentType: string; language: string | null;
+      hook: string | null; captionIdea: string | null; scriptOutline: string | null;
+      trend: { id: string; sourceUrl: string; hashtagsJson: string | null };
+    } = null;
+    if (body.adaptationId) {
+      const row = await db.trendAdaptation.findUnique({
+        where: { id: String(body.adaptationId) },
+        include: { trend: { select: { id: true, sourceUrl: true, hashtagsJson: true } } },
+      });
+      if (!row || row.userId !== user.id) throw new ApiError(404, "ADAPTATION_NOT_FOUND", "Adaptation not found");
+      adaptation = {
+        id: row.id,
+        trendId: row.trendId,
+        platform: row.platform,
+        contentType: row.contentType,
+        language: row.language,
+        hook: row.hook,
+        captionIdea: row.captionIdea,
+        scriptOutline: row.scriptOutline,
+        trend: row.trend,
+      };
+    }
+
     let hook = body.hook ?? null;
     let caption = body.caption ?? null;
     let script = body.script ?? null;
     let hashtags = body.hashtags ?? null;
+    if (adaptation) {
+      hook = adaptation.hook ?? hook;
+      caption = adaptation.captionIdea ?? caption;
+      script = adaptation.scriptOutline ?? script;
+      if (adaptation.trend.hashtagsJson) {
+        try {
+          const tags: unknown = JSON.parse(adaptation.trend.hashtagsJson);
+          if (Array.isArray(tags) && tags.length) hashtags = tags.map(String).join(" ");
+        } catch { /* keep body hashtags */ }
+      }
+    }
 
     const LANG_NAME: Record<string, string> = { hy: "Armenian (Հայերեն)", ru: "Russian (Русский)", en: "English" };
 
@@ -66,7 +102,7 @@ Return JSON: {"hook": str, "caption": str, "script": str (only for video types, 
         userId: user.id,
         brandId: brand.id,
         contentPlanId: body.contentPlanId ?? null,
-        trendId: body.trendId ?? null,
+        trendId: adaptation?.trendId ?? body.trendId ?? null,
         title: String(body.title ?? "Untitled").slice(0, 200),
         platform,
         language,
@@ -76,10 +112,19 @@ Return JSON: {"hook": str, "caption": str, "script": str (only for video types, 
         script: script ? String(script).slice(0, 8000) : null,
         hashtags: hashtags ? String(hashtags).slice(0, 500) : null,
         approvalState: "DRAFT",
-        metaJson: body.meta ? JSON.stringify(body.meta) : null,
+        metaJson: JSON.stringify({
+          ...(body.meta && typeof body.meta === "object" ? body.meta : {}),
+          ...(adaptation ? { fromAdaptation: adaptation.id, fromTrendSource: adaptation.trend.sourceUrl } : {}),
+        }),
       },
     });
     await audit.log({ userId: user.id, action: "content.create", objectType: "ContentItem", objectId: item.id, summary: item.title });
+    if (adaptation) {
+      await db.trendAdaptation.update({
+        where: { id: adaptation.id },
+        data: { status: "USED", usedContentItemId: item.id },
+      });
+    }
     return ok(item, 201);
   });
 }

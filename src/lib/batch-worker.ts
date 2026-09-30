@@ -1,44 +1,56 @@
 "use client";
 
-// ---- Shared client-side driver for durable CONTENT_BATCH jobs ----
-// Single source of truth for "which batch job is being stepped right now":
-// the Planner (manual start/resume) and the global background worker chip
-// (app-shell, auto-resume on any view) both go through claim() — so a job
-// can never be double-stepped by two loops in the same tab. Cross-tab safety
-// comes from the server-side claimAt guard on the step route (BUSY response).
+// ---- Shared client-side driver for durable jobs (CONTENT_BATCH, TREND_SEARCH) ----
+// Single source of truth for "which job is being stepped right now":
+// the Planner / Trends view (manual start/resume) and the global background
+// worker chip (app-shell, auto-resume on any view) both go through claim() —
+// so a job can never be double-stepped by two loops in the same tab.
+// Cross-tab safety comes from the server-side claimAt guard on the step
+// routes (BUSY response).
 //
-// The driver emits progress + finish events; UI surfaces (Planner card, floating
-// chip) subscribe instead of owning the loop. The job itself is checkpointed
-// server-side, so any driver crash is recoverable by simply driving again.
+// The driver emits progress + finish events; UI surfaces subscribe instead of
+// owning the loop. Jobs are checkpointed server-side, so any driver crash is
+// recoverable by simply driving again.
 
 import { api } from "@/lib/use-i18n";
 
-export interface BatchRun {
+export type DrivableKind = "CONTENT_BATCH" | "TREND_SEARCH";
+
+export interface JobRun {
   jobId: string;
-  planId: string;
+  kind: DrivableKind;
+  /** batch: owning plan; trend: search topic (for chip labels) */
+  planId?: string;
+  topic?: string;
   done: number;
   total: number;
+  /** display stage for trend jobs (SEARCHING / …) */
+  stage?: string;
 }
 
-export type BatchFinishKind = "COMPLETED" | "CANCELLED" | "PARTIAL" | "FAILED" | "NETWORK";
+// backward-compatible alias used by the Planner (kind is optional and forced
+// to CONTENT_BATCH by the wrapper below)
+export type BatchRun = Omit<JobRun, "kind"> & { kind?: "CONTENT_BATCH" };
 
-export interface BatchFinishEvent {
-  run: BatchRun;
-  kind: BatchFinishKind;
+export type JobFinishKind = "COMPLETED" | "CANCELLED" | "PARTIAL" | "FAILED" | "NETWORK" | "RETRY_LATER";
+
+export interface JobFinishEvent {
+  run: JobRun;
+  kind: JobFinishKind;
   done: number;
   total: number;
   /** raw transport error message, only for kind=NETWORK */
   error?: string;
 }
 
-type FinishListener = (e: BatchFinishEvent) => void;
-type ProgressListener = (runs: BatchRun[]) => void;
+type FinishListener = (e: JobFinishEvent) => void;
+type ProgressListener = (runs: JobRun[]) => void;
 
-const active = new Map<string, BatchRun>();
+const active = new Map<string, JobRun>();
 const finishListeners = new Set<FinishListener>();
 const progressListeners = new Set<ProgressListener>();
 
-export function activeRuns(): BatchRun[] {
+export function activeRuns(): JobRun[] {
   return Array.from(active.values());
 }
 
@@ -71,7 +83,7 @@ function emitProgress() {
   }
 }
 
-function emitFinish(e: BatchFinishEvent) {
+function emitFinish(e: JobFinishEvent) {
   for (const l of finishListeners) {
     try {
       l(e);
@@ -81,55 +93,66 @@ function emitFinish(e: BatchFinishEvent) {
   }
 }
 
+function stepEndpoint(kind: DrivableKind, jobId: string): string {
+  return kind === "CONTENT_BATCH"
+    ? `/api/plans/content/batch-jobs/${jobId}/step`
+    : `/api/trends/jobs/${jobId}/step`;
+}
+
+function makeToken(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `t${Date.now()}${Math.random().toString(36).slice(2)}`;
+}
+
 /**
- * Step a batch job to its terminal state, one bounded POST per item (~one LLM call).
- * Each drive holds a claim token: the server renews it for the same token and answers
- * BUSY to a different driver inside the freshness window — so the Planner and the
- * background chip (or another tab) can never double-step the same job.
- * Returns false immediately when the job is already claimed in this tab (or the server
- * says BUSY because another tab is driving it) — no duplicate stepping.
+ * Step a durable job to its terminal state (one bounded POST per step).
+ * Each drive holds a claim token: the server renews it for the same token and
+ * answers BUSY to a different driver inside the freshness window — so the
+ * Planner/Trends and the background chip (or another tab) can never
+ * double-step the same job. RETRY_LATER means the job hit a retryable failure
+ * and is backing off (nextPollAt) — released silently, the poller re-drives
+ * it when due; attempts are bounded server-side, so 429s never hot-loop.
  */
-export async function driveBatchJob(run: BatchRun): Promise<boolean> {
+export async function driveJob(run: JobRun): Promise<boolean> {
   if (active.has(run.jobId)) return false;
   active.set(run.jobId, { ...run });
   emitProgress();
-  const token =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `t${Date.now()}${Math.random().toString(36).slice(2)}`;
+  const token = makeToken();
   try {
     for (;;) {
-      const st = await api<{ status: string; done: number; total: number }>(
-        `/api/plans/content/batch-jobs/${run.jobId}/step`,
+      const st = await api<{ status: string; done?: number; total?: number; stage?: string; trendsFound?: number }>(
+        stepEndpoint(run.kind, run.jobId),
         { method: "POST", body: JSON.stringify({ token }) },
       );
-      if (st.status === "BUSY") {
-        // another driver (other tab / other loop) holds the claim — release silently;
-        // the job stays in the feed and its real driver will finish it
+      if (st.status === "BUSY" || st.status === "BACKOFF") {
+        // another driver holds the claim / job is in backoff — release silently;
+        // the poller re-drives when due, the real driver will finish it
         active.delete(run.jobId);
         emitProgress();
         return false;
       }
       const cur = active.get(run.jobId);
       if (cur) {
-        cur.done = st.done;
-        cur.total = st.total || cur.total;
+        if (typeof st.done === "number") cur.done = st.done;
+        if (typeof st.total === "number" && st.total > 0) cur.total = st.total;
+        if (typeof st.stage === "string") cur.stage = st.stage;
+        if (typeof st.trendsFound === "number") cur.done = st.trendsFound;
         emitProgress();
       }
       if (st.status === "PROCESSING") continue;
       // terminal
       active.delete(run.jobId);
       emitProgress();
-      const total = st.total || run.total;
-      const kind: BatchFinishKind =
-        st.status === "COMPLETED"
-          ? "COMPLETED"
-          : st.status === "CANCELLED"
-            ? st.done > 0
-              ? "PARTIAL"
-              : "CANCELLED"
-            : "FAILED"; // FAILED / NEEDS_USER_ACTION — surfaced honestly
-      emitFinish({ run, kind, done: st.done, total });
+      const total = typeof st.total === "number" && st.total ? st.total : run.total;
+      const done = typeof st.done === "number" ? st.done : run.done;
+      let kind: JobFinishKind;
+      if (st.status === "COMPLETED") kind = "COMPLETED";
+      else if (st.status === "RETRYING" || st.status === "WAITING_PROVIDER") kind = "RETRY_LATER";
+      else if (st.status === "CANCELLED") kind = done > 0 && run.kind === "CONTENT_BATCH" ? "PARTIAL" : "CANCELLED";
+      else if (st.status === "NEEDS_USER_ACTION" || st.status === "FAILED") kind = "FAILED";
+      else kind = "FAILED";
+      emitFinish({ run, kind, done, total });
       return true;
     }
   } catch (e) {
@@ -145,4 +168,9 @@ export async function driveBatchJob(run: BatchRun): Promise<boolean> {
     });
     return true;
   }
+}
+
+/** Backward-compatible wrapper used by the Planner for CONTENT_BATCH runs. */
+export async function driveBatchJob(run: BatchRun): Promise<boolean> {
+  return driveJob({ ...run, kind: run.kind ?? "CONTENT_BATCH" });
 }
