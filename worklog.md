@@ -620,3 +620,29 @@ Stage Summary:
 - Гап-лист остатка: §24 Talking Avatar (честный BLOCKED-адаптер), §30 admin-view, SMTP reset-письма, ОЗВУЧКА сцен (TTS-наррация + настоящий duck в mixdown — интерфейс editApplied.duck уже зарезервирован), кнопка «в контент» для финального видео (ContentItem attachment).
 - Риски: нормализация стрипает исходное аудио клипов (саундтрек = единственный звук; честно отражено в UI нотой); -c:v copy на concat требует одинаковых кодек-параметров — гарантируется нашей же нормализацией; ffmpeg timeout 5 мин на шаг.
 - Cron webDevReview пересоздан (job 427228, 0 */15 * * * ?, Asia/Yerevan) — прежний 427062 исчез.
+
+---
+Task ID: 23 (Video Voiceover + Real Sidechain Duck — полный звуковой цикл видео)
+Agent: Z.ai Code (main)
+Task: «Продолжай!» — продолжение по handover Task 22. Взят рекомендованный пункт: ОЗВУЧКА сцен (TTS-наррация + настоящий duck в mixdown, editApplied.duck интерфейс был зарезервирован). Видео-цикл закрыт полностью: сценарий → сцены → музыка → ГОЛОС → MP4.
+
+Work Log:
+- АРХИТЕКТУРА: voiceover-конфиг живёт в VideoProject.metaJson.voiceover { assetId, enabled, duckMusic, text, textSource, voice, speed, generatedAt } — schema НЕ менялась (паттерн soundtrack из Task 22). Аудио — реальный TTS-ассет kind=VOICE в MediaAsset.
+- API POST /api/generate/video action=generate_voiceover: текст с приоритетом user → наррации сцен (join по порядку) → project.script (textSource честно записан); 409 NO_NARRATION_TEXT когда совсем пусто; 400 TEXT_TOO_LONG >2000 (лимит провайдера); assertQuota TTS; durable job kind=TTS (синхронный паттерн tts-роута, idempotency voiceover:{project}:{len}:{voice}:{speed}:{ts}); результат → metaJson.voiceover с СОХРАНЕНИЕМ пользовательских тумблеров enabled/duckMusic при регенерации; audit video.voiceover_generate.
+- API PATCH /api/video-projects voiceover: { enabled?, duckMusic? } тумблеры + { remove: true } детач; 409 NO_VOICEOVER если аудио ещё нет; audit video.voiceover_config.
+- ffmpeg MIXDOWN (assemble.ts): 3 честных пути — (a) music+voice: filter_complex — музыкальная цепочка (trim/fade/volume + apad=whole_dur) → sidechaincompress(voice) → amix normalize=0; (b) voice-only: -t videoDur честно обрезает длинную наррацию; (c) music-only — прежний путь. DUCK НАСТОЯЩИЙ: threshold производный от §20-интента duckDb (10^(db/20)*0.3, clamp 0.005-0.4, -12dB → 0.075), ratio=8, attack=25ms, release=450ms; duckMusic default TRUE при наличии голоса. editApplied.voice { applied, assetId, duck{engine,threshold,ratio,derivedFromDuckDb} }, duck-строка описывает факт; outputJson + hasVoice/ducked; audit summary "music+voice mixed, ducked".
+- БАГ-ФИКС (ffmpeg, пойман curl-QA): при duckMusic=false asplit оставлял [vs] неподключённым → "Filter 'asplit' has output 0 (vs) unconnected". Фикс: asplit только когда голос реально кормит sidechain (условный voiceChain).
+- БАГ-ФИКС (React, пойман browser-QA): <audio preload="metadata"> у стримированного ассета отдаёт duration=Infinity → честное предупреждение " longer than video" показывало «Infinityվ». Фикс: metadata-seek hack (currentTime=1e101 + timeupdate) + Number.isFinite-гарды.
+- UI (video-studio.tsx, карточка «Հնչյունավորում» внутри Final Assembly): редактируемый текст (префилл наррации/сценарий, счётчик n/2000 с деструктивным состоянием), speed Select ×0.8-×1.2, кнопка Generate/Regenerate, аудио-плеер с реальной длительностью, метаданные (chars · источник текста · сек), Switch «включить в сборку» + Switch «музыка под голосом» (виден при выбранном саундтреке), honest amber-warning «голос длиннее видео — обрежется», sidechain-note, detach-кнопка (Trash2) со снятием аудио из сборки.
+- i18n: +21 ключ studio.vid.voice.* ×3 локали (parity 204×3=0 missing); studio.vid.assembly.duckNote обновлён во всех локалях — duck теперь ПРИМЕНЯЕТСЯ (не «ships later»).
+- ВЕРИФИКАЦИЯ (curl): generate_voiceover пустой текст → 197 chars textSource=narrations; PATCH duckMusic toggle → meta подтверждена; 2100 chars → TEXT_TOO_LONG; unauth → 401; чужой/несуществующий проект → NOT_FOUND.
+- ВЕРИФИКАЦИЯ (сборки, все COMPLETED): music+voice+duck → MP4 5.2s h264 720x1280 + AAC 44.1kHz, mean -14.1dB/max -2.4dB (речь -12.9dB vs пауза -21.1dB — голос реально в миксе); voice-only → "voiceover only" честная нота; финальный meta editApplied.voice.duck { engine: sidechaincompress, threshold 0.0754, ratio 8, derivedFromDuckDb -12 }.
+- ВЕРИФИКАЦИЯ (agent-browser E2E): карточка рендерится с наррациями; тумблеры включения/duck — PATCH туда-обратно; Regenerate через UI → POST 200 за 4.3s + тост; UI-сборка → финальный <video> плеер; detach → meta очищена → повторная генерация восстановила; Infinity-duration warning исчез (16.2s реальных); mobile 390px scrollWidth=390 (без overflow), desktop 1280 ок; консоль чистая; скриншоты /tmp/voiceover-card.png, /tmp/voiceover-mobile.png.
+- КАЧЕСТВО: lint 0, tsc src/ 0, i18n parity 0×3, dev.log без runtime-ошибок, аудит-трейл полный (generate/config/assembled с duck-статусом).
+
+Stage Summary:
+- Video Studio теперь полная звуковая стена: сценарий → сцены → саундтрек с §20 edit-intents → TTS-озвучка из нарраций → НАСТОЯЩИЙ sidechain-ducking в ffmpeg-mixdown → скачиваемый MP4. Зарезервированное обещание editApplied.duck из Task 21/22 выполнено по-настоящему.
+- Все 3 звуковые конфигурации честны: music+voice (duck), voice-only (обрезка по видео с предупреждением), music-only (без фейкового duck).
+- Остаток гап-листа: §24 Talking Avatar (BLOCKED-адаптер с plugin-слотом), §30 внутренний admin-view, SMTP reset-письма, кнопка «в контент» для финального видео (ContentItem attachment), субтитры-менеджер (§23).
+- Риски: TTS-провайдер ограничен 2000 chars/запрос — длинные сценарии требуют сплита (честный 400 с подсказкой); sidechaincompress-параметры подобраны консервативно (порог из duckDb — эвристика, не измерение).
+- Next: §24 Avatar Studio или §30 admin-view; идея — пер-сценная озвучка (наррация каждой сцены своим TTS-вызовом с точной синхронизацией по клипам).

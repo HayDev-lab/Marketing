@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import {
   Clapperboard, Loader2, Plus, ArrowLeft, Film, Play, RotateCcw, Save,
   Wand2, BookOpen, Palette, User, CheckCircle2, XCircle, X, CircleDashed, Clock,
-  FileVideo, Download, Music4, Info, Layers,
+  FileVideo, Download, Music4, Info, Layers, Mic, Trash2,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api, assetUrl } from "@/lib/use-i18n";
@@ -44,9 +44,23 @@ interface MusicItem {
   meta: { edit?: Partial<MusicEdit> };
   asset: { id: string; url: string; mimeType: string; size: number } | null;
 }
+interface VoiceoverMeta {
+  assetId?: string; enabled?: boolean; duckMusic?: boolean;
+  text?: string; textSource?: string; voice?: string; speed?: number; generatedAt?: string;
+}
 
-function parseProjectMeta(raw: string | null | undefined): { soundtrack?: { musicAssetId: string; loopOverride: boolean }; assembly?: Record<string, unknown> } {
+const VOICEOVER_LIMIT = 2000;
+
+function parseProjectMeta(raw: string | null | undefined): { soundtrack?: { musicAssetId: string; loopOverride: boolean }; voiceover?: VoiceoverMeta | null; assembly?: Record<string, unknown> } {
   try { return raw ? (JSON.parse(raw) as Record<string, never>) : {}; } catch { return {}; }
+}
+
+/** Default narration text: scene narrations (in order) → full script → empty. */
+function defaultVoiceText(p: Project | null): string {
+  if (!p) return "";
+  const narrations = (p.scenes ?? []).map((s) => (s.narration ?? "").trim()).filter(Boolean);
+  if (narrations.length) return narrations.join("\n\n");
+  return p.script?.trim() ?? "";
 }
 
 type BibleRows = { key: string; value: string }[];
@@ -115,6 +129,17 @@ export function VideoStudioModule() {
   const assembleJobRef = useRef(assembleJob);
   assembleJobRef.current = assembleJob;
 
+  // voiceover state
+  const [voiceText, setVoiceText] = useState("");
+  const [voiceSpeed, setVoiceSpeed] = useState("1");
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceAssetId, setVoiceAssetId] = useState<string | null>(null);
+  const [voiceInfo, setVoiceInfo] = useState<{ textSource?: string; generatedAt?: string; chars?: number } | null>(null);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [voiceDuck, setVoiceDuck] = useState(true);
+  const [voiceDur, setVoiceDur] = useState<number | null>(null);
+  const [savingVoice, setSavingVoice] = useState(false);
+
   const loadList = useCallback(async () => {
     try {
       const list = await api<Project[]>("/api/video-projects");
@@ -162,6 +187,13 @@ export function VideoStudioModule() {
       const meta = parseProjectMeta(p.metaJson);
       setSoundtrackId(meta.soundtrack?.musicAssetId ?? "");
       setLoopOverride(Boolean(meta.soundtrack?.loopOverride));
+      const vo = meta.voiceover ?? null;
+      setVoiceAssetId(vo?.assetId ?? null);
+      setVoiceInfo(vo ? { textSource: vo.textSource, generatedAt: vo.generatedAt } : null);
+      setVoiceText(vo?.text ?? defaultVoiceText(p));
+      setVoiceEnabled(vo ? vo.enabled !== false : true);
+      setVoiceDuck(vo ? vo.duckMusic !== false : true);
+      setVoiceDur(null);
       setView("editor");
       void loadMusic();
       try {
@@ -418,6 +450,74 @@ export function VideoStudioModule() {
   const toggleLoop = (checked: boolean) => {
     setLoopOverride(checked);
     void saveSoundtrack(soundtrackId, checked);
+  };
+
+  const generateVoiceover = async () => {
+    if (!project) return;
+    const text = voiceText.trim();
+    if (text.length > VOICEOVER_LIMIT) {
+      toast.warning(t("studio.vid.voice.tooLong", { n: text.length, max: VOICEOVER_LIMIT }));
+      return;
+    }
+    setVoiceBusy(true);
+    pulseCore("GENERATING");
+    try {
+      const res = await api<{ assetId: string; chars: number; textSource: string }>("/api/generate/video", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "generate_voiceover",
+          projectId: project.id,
+          text: text || undefined, // empty → server builds from scene narrations / script
+          speed: Number(voiceSpeed) || 1,
+        }),
+      });
+      setVoiceAssetId(res.assetId);
+      setVoiceInfo({ textSource: res.textSource, chars: res.chars, generatedAt: new Date().toISOString() });
+      setVoiceEnabled(true);
+      setVoiceDur(null);
+      pulseCore("SUCCESS");
+      toast.success(t("studio.vid.voice.generated"));
+      await refreshProject();
+    } catch (err) {
+      pulseCore("ERROR");
+      showStudioError(t, err);
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const saveVoiceConfig = async (patch: { enabled?: boolean; duckMusic?: boolean; remove?: boolean }) => {
+    if (!project) return;
+    setSavingVoice(true);
+    try {
+      await api<Project>("/api/video-projects", {
+        method: "PATCH",
+        body: JSON.stringify({ projectId: project.id, voiceover: patch }),
+      });
+      await refreshProject();
+    } catch (err) {
+      showStudioError(t, err);
+    } finally {
+      setSavingVoice(false);
+    }
+  };
+
+  const toggleVoiceEnabled = (checked: boolean) => {
+    setVoiceEnabled(checked);
+    void saveVoiceConfig({ enabled: checked });
+  };
+
+  const toggleVoiceDuck = (checked: boolean) => {
+    setVoiceDuck(checked);
+    void saveVoiceConfig({ duckMusic: checked });
+  };
+
+  const detachVoiceover = async () => {
+    setVoiceAssetId(null);
+    setVoiceInfo(null);
+    setVoiceDur(null);
+    await saveVoiceConfig({ remove: true });
+    toast.info(t("studio.vid.voice.detached"));
   };
 
   const startAssembly = async () => {
@@ -851,6 +951,135 @@ export function VideoStudioModule() {
                   <Info className="mt-0.5 h-3 w-3 shrink-0" /> {t("studio.vid.assembly.silentNote")}
                 </p>
               )}
+
+              {/* voiceover (TTS narration) — mixed into the final MP4 with real sidechain ducking */}
+              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/10 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label className="flex items-center gap-1.5 text-sm font-medium">
+                    <Mic className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.vid.voice.title")}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    {voiceAssetId && (
+                      <>
+                        <Badge variant="outline" className={`text-[10px] ${voiceEnabled ? "border-[var(--neon-2)]/50 text-[var(--neon-2)]" : "text-muted-foreground"}`}>
+                          {voiceEnabled ? t("studio.vid.voice.included") : t("studio.vid.voice.excluded")}
+                        </Badge>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          disabled={savingVoice}
+                          aria-label={t("studio.vid.voice.detach")}
+                          title={t("studio.vid.voice.detach")}
+                          onClick={detachVoiceover}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="vid-vo-text" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.text")}</Label>
+                    <span className={`text-[10px] ${voiceText.length > VOICEOVER_LIMIT ? "text-destructive" : "text-muted-foreground"}`}>
+                      {voiceText.length}/{VOICEOVER_LIMIT}
+                    </span>
+                  </div>
+                  <Textarea
+                    id="vid-vo-text"
+                    value={voiceText}
+                    onChange={(e) => setVoiceText(e.target.value)}
+                    rows={3}
+                    className="resize-none text-[13px] leading-relaxed"
+                    placeholder={t("studio.vid.voice.textPh")}
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="vid-vo-speed" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.speed")}</Label>
+                      <Select value={voiceSpeed} onValueChange={setVoiceSpeed}>
+                        <SelectTrigger id="vid-vo-speed" className="h-9 w-[92px] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {["0.8", "0.9", "1", "1.1", "1.2"].map((s) => (
+                            <SelectItem key={s} value={s}>×{s}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="min-h-11 gap-1.5 text-xs"
+                      disabled={voiceBusy || !voiceText.trim() || voiceText.length > VOICEOVER_LIMIT}
+                      onClick={generateVoiceover}
+                    >
+                      {voiceBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mic className="h-3.5 w-3.5 text-[var(--neon-3)]" />}
+                      {voiceAssetId ? t("studio.vid.voice.regen") : t("studio.vid.voice.generate")}
+                    </Button>
+                  </div>
+                  {!voiceText.trim() && (
+                    <p className="text-[11px] text-muted-foreground">{t("studio.vid.voice.emptyHint")}</p>
+                  )}
+                  {voiceText.length > VOICEOVER_LIMIT && (
+                    <p className="text-[11px] text-destructive">{t("studio.vid.voice.tooLong", { n: voiceText.length, max: VOICEOVER_LIMIT })}</p>
+                  )}
+                </div>
+
+                {voiceAssetId && (
+                  <div className="grid gap-2">
+                    <audio
+                      controls
+                      preload="metadata"
+                      src={assetUrl(`/api/assets/${voiceAssetId}/raw`)}
+                      className="h-9 w-full"
+                      onLoadedMetadata={(e) => {
+                        const el = e.currentTarget;
+                        if (Number.isFinite(el.duration)) {
+                          setVoiceDur(el.duration);
+                          return;
+                        }
+                        // Streamed audio reports Infinity — force a metadata seek (standard workaround)
+                        el.currentTime = 1e101;
+                        const handler = () => {
+                          el.removeEventListener("timeupdate", handler);
+                          if (Number.isFinite(el.duration)) setVoiceDur(el.duration);
+                          el.currentTime = 0;
+                        };
+                        el.addEventListener("timeupdate", handler);
+                      }}
+                      aria-label={t("studio.vid.voice.title")}
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[10px] text-muted-foreground">
+                        {voiceInfo?.chars ? `${voiceInfo.chars} ${t("studio.vid.voice.charsUnit")}` : ""}
+                        {voiceInfo?.textSource ? ` · ${t(`studio.vid.voice.source.${voiceInfo.textSource === "narrations" ? "narrations" : voiceInfo.textSource === "script" ? "script" : "user"}` as const)}` : ""}
+                        {voiceDur != null && Number.isFinite(voiceDur) ? ` · ${voiceDur.toFixed(1)}s` : ""}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <Switch id="vid-vo-include" checked={voiceEnabled} onCheckedChange={toggleVoiceEnabled} disabled={savingVoice} />
+                          <Label htmlFor="vid-vo-include" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.include")}</Label>
+                        </div>
+                        {soundtrackId && (
+                          <div className="flex items-center gap-1.5">
+                            <Switch id="vid-vo-duck" checked={voiceDuck} onCheckedChange={toggleVoiceDuck} disabled={savingVoice} />
+                            <Label htmlFor="vid-vo-duck" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.duck")}</Label>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {voiceDuck && soundtrackId && (
+                      <p className="text-[11px] text-muted-foreground">{t("studio.vid.voice.duckNote")}</p>
+                    )}
+                    {voiceDur != null && estVideoDur > 0 && voiceDur > estVideoDur + 0.5 && (
+                      <p className="text-[11px] text-amber-500">{t("studio.vid.voice.longerThanVideo", { voice: voiceDur.toFixed(0), video: Math.round(estVideoDur) })}</p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* readiness + action */}
               <div className="grid gap-2">

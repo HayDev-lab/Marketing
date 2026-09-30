@@ -4,9 +4,12 @@
 //   1. probe each COMPLETED scene clip (ffprobe) — honest failure if a file is missing
 //   2. normalize every clip to the project geometry (scale+pad, 30fps, h264, audio stripped)
 //   3. concat via the concat demuxer (stream copy — all intermediates share codec params)
-//   4. soundtrack mixdown (optional): Music Studio edit-intents (§20) are APPLIED here —
-//      volume / trim / fades / loop-to-fit; duck is recorded but not applied until
-//      voiceover mixing ships (honest note in output meta)
+//   4. audio mixdown:
+//      • soundtrack (optional): Music Studio edit-intents (§20) are APPLIED here —
+//        volume / trim / fades / loop-to-fit
+//      • voiceover (optional): TTS narration attached to the project (metaJson.voiceover)
+//      • when BOTH are present and ducking is on, the music is ducked under the voice
+//        with a REAL sidechaincompress filter (threshold derived from the §20 duckDb intent)
 //   5. final MP4 → MediaAsset → project.finalAssetId + status ASSEMBLED
 //
 // Runs inside a durable GenerationJob (kind=ASSEMBLE): the API route creates the job
@@ -198,10 +201,101 @@ export async function runAssemblyJob(jobId: string) {
     const concatProbe = await probeMedia(concatFile);
     const videoDur = concatProbe.durationSec;
 
-    // ---- 4: soundtrack mixdown with applied edit-intents ----
+    // ---- 4: audio mixdown — soundtrack (edit-intents §20) + voiceover (real sidechain duck) ----
+    const voiceover = (projMeta.voiceover ?? null) as {
+      assetId?: string; enabled?: boolean; duckMusic?: boolean;
+    } | null;
+    let voiceFile: string | null = null;
+    let voiceMissing = false;
+    if (voiceover?.assetId && voiceover.enabled !== false) {
+      const voAsset = await db.mediaAsset.findUnique({ where: { id: voiceover.assetId } });
+      if (voAsset) voiceFile = path.join(UPLOADS_DIR, voAsset.storageKey);
+      else voiceMissing = true; // honest: narration asset deleted from library — proceed without it
+    }
+
     let finalFile = concatFile;
-    const editApplied: Record<string, unknown> = { music: false };
-    if (musicFile) {
+    const editApplied: Record<string, unknown> = { music: false, voice: false };
+    // Ducking decision: when a voiceover rides in the mix, duck the music by default.
+    // music-edit duckDb (§20) sets how hard the sidechain pulls the music down.
+    const duckApplied = Boolean(voiceFile && musicFile && voiceover?.duckMusic !== false);
+    const duckDb = edit.duckDb ?? -12;
+    const duckThreshold = Math.min(0.4, Math.max(0.005, Math.pow(10, duckDb / 20) * 0.3));
+
+    if (musicFile && voiceFile) {
+      // music + voice: filter_complex — music chain → sidechaincompress(voice) → amix
+      await probeMedia(musicFile);
+      await probeMedia(voiceFile);
+      const musicProbe = await probeMedia(musicFile);
+      const tStart = Math.min(edit.trimStartSec ?? 0, Math.max(0, musicProbe.durationSec - 0.5));
+      const tEnd = edit.trimEndSec != null ? Math.min(edit.trimEndSec, musicProbe.durationSec) : musicProbe.durationSec;
+      const trimmedDur = Math.max(0.2, tEnd - tStart);
+      const fits = trimmedDur >= videoDur - 0.05;
+      const audioEnd = edit.loop ? videoDur : Math.min(trimmedDur, videoDur);
+      const fadeIn = Math.min(edit.fadeInSec ?? 0, audioEnd);
+      const fadeOut = Math.min(edit.fadeOutSec ?? 0, Math.max(0, audioEnd - fadeIn));
+      const musicChain = [
+        "atrim=start=" + tStart.toFixed(3) + ":end=" + tEnd.toFixed(3),
+        "asetpts=PTS-STARTPTS",
+        fadeIn > 0.01 ? `afade=t=in:st=0:d=${fadeIn.toFixed(3)}` : null,
+        fadeOut > 0.01 ? `afade=t=out:st=${Math.max(0, audioEnd - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}` : null,
+        `volume=${Math.min(2, Math.max(0, edit.volume ?? 1)).toFixed(3)}`,
+        "aresample=44100",
+        "apad=whole_dur=" + videoDur.toFixed(3),
+      ].filter(Boolean).join(",");
+
+      const duckChain = duckApplied
+        ? `[m][vs]sidechaincompress=threshold=${duckThreshold.toFixed(4)}:ratio=8:attack=25:release=450[md];`
+        : "";
+      // asplit only when the voice also feeds the sidechain — ffmpeg fails on unconnected pads
+      const voiceChain = duckApplied
+        ? `[2:a]aresample=44100,asplit=2[vs][vp];`
+        : `[2:a]aresample=44100[vp];`;
+      const fc = [
+        `[1:a]${musicChain}[m];`,
+        voiceChain,
+        duckChain,
+        `[vp]apad=whole_dur=${videoDur.toFixed(3)}[vpd];`,
+        `[md][vpd]amix=inputs=2:duration=longest:normalize=0[aout]`,
+      ].filter(Boolean).join("");
+
+      finalFile = path.join(tmp, "final.mp4");
+      const args = ["-y", "-i", concatFile];
+      if (edit.loop && !fits) args.push("-stream_loop", "-1");
+      args.push("-i", musicFile, "-i", voiceFile);
+      args.push("-filter_complex", fc, "-map", "0:v:0", "-map", "[aout]");
+      args.push("-t", videoDur.toFixed(3), "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", finalFile);
+      await run("ffmpeg", args, "music+voice mixdown");
+      Object.assign(editApplied, {
+        music: true,
+        musicAssetId: soundtrack?.musicAssetId,
+        volume: edit.volume,
+        trimSec: tEnd < musicProbe.durationSec || tStart > 0 ? [tStart, tEnd] : null,
+        fadeInSec: fadeIn,
+        fadeOutSec: fadeOut,
+        loop: edit.loop && !fits,
+        loopReason: edit.loop && !fits ? "music shorter than video — looped to fit" : null,
+        audioEndsAtSec: edit.loop ? null : Number(Math.min(trimmedDur, videoDur).toFixed(2)),
+        voice: { applied: true, assetId: voiceover?.assetId, duck: duckApplied ? { engine: "sidechaincompress", threshold: Number(duckThreshold.toFixed(4)), ratio: 8, derivedFromDuckDb: duckDb } : false },
+        duck: duckApplied ? "applied — music ducked under voice (sidechaincompress)" : (edit.duckEnabled ? "voiceover ducking disabled for this project" : false),
+      });
+    } else if (voiceFile) {
+      // voice only — narration is the sole audio track
+      await probeMedia(voiceFile);
+      finalFile = path.join(tmp, "final.mp4");
+      await run("ffmpeg", [
+        "-y", "-i", concatFile, "-i", voiceFile,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-af", "aresample=44100",
+        "-t", videoDur.toFixed(3),
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+        finalFile,
+      ], "voice-only mixdown");
+      Object.assign(editApplied, {
+        voice: { applied: true, assetId: voiceover?.assetId, duck: false },
+        duck: false,
+        note: "voiceover only — no soundtrack selected",
+      });
+    } else if (musicFile) {
       await probeMedia(musicFile); // honest failure if soundtrack file missing
       const musicProbe = await probeMedia(musicFile);
       const tStart = Math.min(edit.trimStartSec ?? 0, Math.max(0, musicProbe.durationSec - 0.5));
@@ -237,8 +331,8 @@ export async function runAssemblyJob(jobId: string) {
         fadeOutSec: fadeOut,
         loop: edit.loop && !fits,
         loopReason: edit.loop && !fits ? "music shorter than video — looped to fit" : null,
-        duck: edit.duckEnabled ? "recorded — voiceover mixing ships later" : false,
         audioEndsAtSec: edit.loop ? null : Number(Math.min(trimmedDur, videoDur).toFixed(2)),
+        duck: edit.duckEnabled ? (voiceMissing ? "voiceover asset missing — duck not applicable" : "duck intent set, but no voiceover in this assembly") : false,
       });
     } else {
       Object.assign(editApplied, { music: false, note: "no soundtrack selected — final video is silent" });
@@ -246,6 +340,7 @@ export async function runAssemblyJob(jobId: string) {
 
     const finalProbe = await probeMedia(finalFile);
     const buf = await readFile(finalFile);
+    const hasAudio = Boolean(musicFile || voiceFile);
 
     // ---- 5: persist final asset + project state ----
     const asset = await saveAssetBuffer(project.userId, buf, "VIDEO", "video/mp4", `final_${project.title.slice(0, 40).replace(/\s+/g, "_")}_v${project.currentVersion}.mp4`, {
@@ -259,7 +354,7 @@ export async function runAssemblyJob(jobId: string) {
       editApplied,
     });
 
-    const nextMeta = { ...projMeta, soundtrack, assembly: { assembledAt: new Date().toISOString(), assetId: asset.id, scenesIncluded: ready.length, scenesSkipped: skipped, durationSec: Number(finalProbe.durationSec.toFixed(2)), hasAudio: Boolean(musicFile), editApplied } };
+    const nextMeta = { ...projMeta, soundtrack, assembly: { assembledAt: new Date().toISOString(), assetId: asset.id, scenesIncluded: ready.length, scenesSkipped: skipped, durationSec: Number(finalProbe.durationSec.toFixed(2)), hasAudio, hasVoice: Boolean(voiceFile), editApplied } };
     const allDone = ready.length === project.scenes.length;
     await db.videoProject.update({
       where: { id: project.id },
@@ -272,7 +367,7 @@ export async function runAssemblyJob(jobId: string) {
 
     await jobs.markCompleted(
       jobId,
-      { assetId: asset.id, url: `/api/assets/${asset.id}/raw`, durationSec: Number(finalProbe.durationSec.toFixed(2)), scenesIncluded: ready.length, scenesSkipped: skipped, hasAudio: Boolean(musicFile) },
+      { assetId: asset.id, url: `/api/assets/${asset.id}/raw`, durationSec: Number(finalProbe.durationSec.toFixed(2)), scenesIncluded: ready.length, scenesSkipped: skipped, hasAudio, hasVoice: Boolean(voiceFile), ducked: duckApplied },
       asset.id,
       0,
     );
@@ -282,7 +377,7 @@ export async function runAssemblyJob(jobId: string) {
       action: "video.assembled",
       objectType: "VideoProject",
       objectId: project.id,
-      summary: `${ready.length}/${project.scenes.length} scenes, ${finalProbe.durationSec.toFixed(1)}s, ${musicFile ? "soundtrack mixed" : "silent"}, ${(buf.length / 1024 / 1024).toFixed(1)}MB`,
+      summary: `${ready.length}/${project.scenes.length} scenes, ${finalProbe.durationSec.toFixed(1)}s, ${hasAudio ? (musicFile && voiceFile ? "music+voice mixed" : voiceFile ? "voice only" : "soundtrack mixed") : "silent"}${duckApplied ? ", ducked" : ""}, ${(buf.length / 1024 / 1024).toFixed(1)}MB`,
     });
 
     return await db.generationJob.findUnique({ where: { id: jobId } });

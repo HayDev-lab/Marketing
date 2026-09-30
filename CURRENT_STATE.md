@@ -19,7 +19,8 @@
 | §15 Prompt Compiler chatbot | ✅ | `prompts/compile`, `trends/prompt-compiler.ts` |
 | §17 Image Studio | ✅ | `generate/image`, routing по провайдерам |
 | §18 Video Studio + durable jobs + resume | ✅ | `VideoProject/VideoScene`, `jobs/[id]` step API |
-| §22 Voice / TTS | ✅ | `generate/tts` (z-ai), voice profiles |
+| §18+ Final Assembly (ffmpeg mixdown) | ✅ | `lib/video/assemble.ts`: сцены → concat → soundtrack (§20 edit-intents) + TTS-voiceover с НАСТОЯЩИМ sidechain duck |
+| §22 Voice / TTS | ✅ | `generate/tts` (z-ai), voice profiles + видео-voiceover (`generate_voiceover`) |
 | §23 Subtitles | ⚠️ частично | модель `SubtitleTrack` есть; UI-генерация — в video-пайплайне, отдельного менеджера нет |
 | §16 Publishing + Calendar | ✅ | `ScheduledPost`, `publishing.tsx` (calendar) |
 | §Analytics | ✅ | `analytics.tsx`, `CostLedger` спарклайны |

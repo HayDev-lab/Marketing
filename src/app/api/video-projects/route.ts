@@ -113,6 +113,31 @@ export async function PATCH(req: NextRequest) {
       });
     }
 
+    // Voiceover config toggles (audio itself is produced by /api/generate/video action=generate_voiceover)
+    //   { projectId, voiceover: { enabled?: bool, duckMusic?: bool } }
+    //   { projectId, voiceover: { remove: true } }  → detach voiceover entirely
+    if (body.voiceover !== undefined) {
+      let meta: Record<string, unknown> = {};
+      try { meta = project.metaJson ? (JSON.parse(project.metaJson) as Record<string, unknown>) : {}; } catch { /* rebuild meta */ }
+      const current = (meta.voiceover ?? null) as { assetId?: string; enabled?: boolean; duckMusic?: boolean } | null;
+      const vo = body.voiceover as { enabled?: unknown; duckMusic?: unknown; remove?: unknown };
+      if (vo.remove === true) {
+        if (current) delete meta.voiceover;
+        await db.videoProject.update({ where: { id: project.id }, data: { metaJson: JSON.stringify(meta) } });
+        await audit.log({ userId: user.id, action: "video.voiceover_config", objectType: "VideoProject", objectId: project.id, summary: "Voiceover detached" });
+      } else {
+        if (!current?.assetId) throw new ApiError(409, "NO_VOICEOVER", "No voiceover generated for this project yet — generate the narration audio first");
+        const next = {
+          ...current,
+          enabled: vo.enabled !== undefined ? Boolean(vo.enabled) : Boolean(current.enabled ?? true),
+          duckMusic: vo.duckMusic !== undefined ? Boolean(vo.duckMusic) : Boolean(current.duckMusic ?? true),
+        };
+        meta.voiceover = next;
+        await db.videoProject.update({ where: { id: project.id }, data: { metaJson: JSON.stringify(meta) } });
+        await audit.log({ userId: user.id, action: "video.voiceover_config", objectType: "VideoProject", objectId: project.id, summary: `Voiceover: enabled=${next.enabled}, duckMusic=${next.duckMusic}` });
+      }
+    }
+
     // Project-level fields
     const data: Record<string, unknown> = {};
     if (body.title !== undefined) data.title = String(body.title).slice(0, 200);

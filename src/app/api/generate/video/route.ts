@@ -5,8 +5,10 @@ import { audit, ledger } from "@/lib/ledger";
 import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
-import { videoSubmit, llmCompleteJson, snapVideoDuration } from "@/lib/ai/zai";
+import { videoSubmit, llmCompleteJson, snapVideoDuration, ttsGenerate, saveAssetBase64 } from "@/lib/ai/zai";
 import { kickAssembly } from "@/lib/video/assemble";
+
+export const VOICEOVER_TEXT_LIMIT = 2000;
 
 // POST /api/generate/video — create/extend VideoProject, submit ONE scene to async provider.
 // Long-running: job goes WAITING_PROVIDER; client polls /api/jobs/[id] (reconciliation, resume).
@@ -189,6 +191,96 @@ export async function POST(req: NextRequest) {
       });
       kickAssembly(job.id);
       return ok({ jobId: job.id }, 202);
+    }
+
+    // ---- Voiceover: REAL TTS narration from the project script / scene narrations ----
+    // Synchronous durable job (same pattern as /api/generate/tts): short audio, safe in-request.
+    // Result is attached to the project via metaJson.voiceover and consumed by the ASSEMBLE mixdown.
+    if (action === "generate_voiceover") {
+      const projectId = String(body.projectId ?? "");
+      const project = await db.videoProject.findUnique({ where: { id: projectId }, include: { scenes: { orderBy: { order: "asc" } } } });
+      if (!project || project.userId !== user.id) throw new ApiError(404, "NOT_FOUND", "Project not found");
+
+      // Text: explicit user text → scene narrations (in order) → full script. Honest 409 when nothing to speak.
+      let text = String(body.text ?? "").trim();
+      let textSource: "user" | "narrations" | "script" = "user";
+      if (!text) {
+        const narrations = project.scenes.map((s) => (s.narration ?? "").trim()).filter(Boolean);
+        if (narrations.length > 0) {
+          text = narrations.join("\n\n");
+          textSource = "narrations";
+        } else if (project.script?.trim()) {
+          text = project.script.trim();
+          textSource = "script";
+        } else {
+          throw new ApiError(409, "NO_NARRATION_TEXT", "No voiceover text: write narration lines on scenes or generate a script first");
+        }
+      }
+      if (text.length > VOICEOVER_TEXT_LIMIT) {
+        throw new ApiError(400, "TEXT_TOO_LONG", `Voiceover text too long: ${text.length} chars (max ${VOICEOVER_TEXT_LIMIT} per call — shorten or split the script)`);
+      }
+
+      const voice = String(body.voice ?? "tongtong");
+      const speed = Math.min(1.5, Math.max(0.5, Number(body.speed) || 1));
+      const route = routeCapability({ capability: "TTS" });
+      if (!route) throw new ApiError(503, "NO_PROVIDER", "No TTS provider available");
+      const estimatedCost = 0.005;
+      await assertQuota(user.id, "TTS", estimatedCost);
+
+      const { job } = await jobs.create({
+        userId: user.id,
+        kind: "TTS",
+        provider: route.providerId,
+        model: route.modelId,
+        input: { projectId: project.id, voiceover: true, text, voice, speed },
+        idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : `voiceover:${project.id}:${text.length}:${voice}:${speed}:${Date.now()}`,
+        estimatedCost,
+      });
+      if (job.status === "COMPLETED" && job.resultAssetId) {
+        return ok({ jobId: job.id, assetId: job.resultAssetId, deduplicated: true });
+      }
+      await jobs.markProcessing(job.id);
+      try {
+        const result = await ttsGenerate({ text, voice, speed });
+        const asset = await saveAssetBase64(user.id, result.base64, "VOICE", result.mimeType, `voiceover_${project.id.slice(-6)}.mp3`, {
+          projectId: project.id,
+          voice,
+          speed,
+          chars: text.length,
+          provider: route.providerId,
+        });
+        await jobs.markCompleted(job.id, { assetId: asset.id, url: `/api/assets/${asset.id}/raw` }, asset.id, estimatedCost);
+
+        const prevMeta = parseJson<Record<string, unknown>>(project.metaJson, {});
+        const prevVoiceover = (prevMeta.voiceover ?? null) as Record<string, unknown> | null;
+        const voiceover = {
+          // preserve user's include/duck toggles when regenerating the audio
+          enabled: prevVoiceover ? Boolean(prevVoiceover.enabled ?? true) : true,
+          duckMusic: prevVoiceover ? Boolean(prevVoiceover.duckMusic ?? true) : true,
+          text,
+          textSource,
+          voice,
+          speed,
+          assetId: asset.id,
+          generatedAt: new Date().toISOString(),
+        };
+        await db.videoProject.update({
+          where: { id: project.id },
+          data: { metaJson: JSON.stringify({ ...prevMeta, voiceover }) },
+        });
+        await audit.log({
+          userId: user.id,
+          action: "video.voiceover_generate",
+          objectType: "VideoProject",
+          objectId: project.id,
+          summary: `Voiceover ${text.length} chars (${textSource}) via ${route.providerId}`,
+        });
+        return ok({ jobId: job.id, assetId: asset.id, url: `/api/assets/${asset.id}/raw`, chars: text.length, textSource });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Voiceover TTS failed";
+        await jobs.markFailed(job.id, message);
+        throw new ApiError(502, "GENERATION_FAILED", message, { jobId: job.id, canRetry: true });
+      }
     }
 
     throw new ApiError(400, "BAD_ACTION", "Unknown action");
