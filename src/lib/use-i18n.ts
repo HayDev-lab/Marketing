@@ -14,11 +14,18 @@ export function useI18n() {
   const setLocale = useCallback(
     (l: Locale) => {
       setLocaleStore(l);
+      // persist for the signed-in user only; on the auth screen there is no
+      // session — the store already updated optimistically, so a 401 here is
+      // expected and must stay silent (no user-facing error, no log noise)
       fetch("/api/auth", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "locale", locale: l }),
-      }).catch(() => {});
+      })
+        .then((r) => {
+          if (!r.ok && r.status !== 401) console.warn(`locale persist failed (${r.status})`);
+        })
+        .catch(() => {});
     },
     [setLocaleStore]
   );

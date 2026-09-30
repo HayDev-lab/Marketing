@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { db } from "@/lib/db";
-import { hashPassword, verifyPassword, validateEmail, validatePassword, createSession, destroySession, getCurrentUser, rateLimit } from "@/lib/auth";
+import { hashPassword, verifyPassword, validateEmail, validatePassword, createSession, destroySession, getCurrentUser, rateLimit, hashToken } from "@/lib/auth";
 import { ok, fail, handle, ApiError } from "@/lib/api";
 import { audit } from "@/lib/ledger";
 import { buildSeedTemplates } from "@/lib/prompt-library-seed";
@@ -112,6 +112,57 @@ export async function POST(req: NextRequest) {
       await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.demo", summary: "Demo workspace login" });
       return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, demo: true });
+    }
+
+    if (action === "request-reset") {
+      const ip = req.headers.get("x-forwarded-for") ?? "local";
+      const rl = rateLimit(`reset-req:${ip}`, 5, 60_000);
+      if (!rl.allowed) throw new ApiError(429, "RATE_LIMITED", `Too many attempts. Retry in ${rl.retryAfterSec}s`);
+      const email = String(body.email ?? "").trim().toLowerCase();
+      if (!validateEmail(email)) throw new ApiError(400, "INVALID_EMAIL", "Invalid email address");
+      const user = await db.user.findUnique({ where: { email } });
+      if (!user) throw new ApiError(404, "NO_ACCOUNT", "No account found with this email");
+
+      // One-time reset token: raw token never stored — only its SHA-256 hash.
+      // Expires in 30 minutes; a successful reset invalidates it and every
+      // active session of the account.
+      const token = randomBytes(32).toString("hex");
+      const resetExpires = new Date(Date.now() + 30 * 60 * 1000);
+      await db.user.update({ where: { id: user.id }, data: { resetToken: hashToken(token), resetExpires } });
+      await audit.log({ userId: user.id, action: "auth.resetRequested", summary: `Password reset requested for ${email}` });
+
+      // Honest delivery status: this sandbox has no SMTP provider, so the
+      // one-time link is returned inline (labeled dev_inline) instead of
+      // pretending an email was sent. In production this branch would
+      // dispatch an email and return { delivery: "email" } with no token.
+      return ok({
+        delivery: "dev_inline" as const,
+        resetPath: `/?reset=${token}`,
+        expiresInMin: 30,
+      });
+    }
+
+    if (action === "reset-password") {
+      const ip = req.headers.get("x-forwarded-for") ?? "local";
+      const rl = rateLimit(`reset-do:${ip}`, 10, 60_000);
+      if (!rl.allowed) throw new ApiError(429, "RATE_LIMITED", `Too many attempts. Retry in ${rl.retryAfterSec}s`);
+      const token = String(body.token ?? "");
+      const password = String(body.password ?? "");
+      if (!token) throw new ApiError(400, "INVALID_TOKEN", "Reset link is invalid or expired");
+      const pw = validatePassword(password);
+      if (!pw.ok) throw new ApiError(400, "WEAK_PASSWORD", pw.reason ?? "Weak password");
+      const user = await db.user.findFirst({ where: { resetToken: hashToken(token) } });
+      if (!user || !user.resetExpires || user.resetExpires.getTime() < Date.now()) {
+        throw new ApiError(400, "INVALID_TOKEN", "Reset link is invalid or expired");
+      }
+      await db.user.update({
+        where: { id: user.id },
+        data: { passwordHash: hashPassword(password), resetToken: null, resetExpires: null },
+      });
+      // force re-login everywhere after a password change
+      await db.session.deleteMany({ where: { userId: user.id } });
+      await audit.log({ userId: user.id, action: "auth.resetCompleted", summary: `Password reset completed for ${user.email}` });
+      return ok({ reset: true, email: user.email });
     }
 
     if (action === "logout") {

@@ -210,7 +210,7 @@ export function OnboardingTour() {
                 aria-selected={i === step}
                 aria-label={`Step ${i + 1}`}
                 onClick={() => setStep(i)}
-                className={`h-1.5 rounded-full transition-all ${i === step ? "w-5 bg-[var(--neon)] shadow-[0_0_8px_var(--neon)]" : i < step ? "w-1.5 bg-[var(--neon)]/50" : "w-1.5 bg-muted"}`}
+                className={`h-1.5 rounded-full transition-all ${i === step ? "w-5 bg-[var(--neon)] shadow-[0_0_8px_var(--neon)]" : i < step ? "w-1.5 bg-[var(--neon)]/60" : "w-1.5 bg-muted-foreground/40"}`}
               />
             ))}
           </div>
