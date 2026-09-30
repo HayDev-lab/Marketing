@@ -499,3 +499,25 @@ Stage Summary:
 - Данные всех аккаунтов целы (проверено SQL-подсчётом всех ключевых таблиц).
 - Риски: файлы в public/fonts должны оставаться в репо (добавить в git); если понадобится расширить подмножества (напр. Geist Mono cyrillic) — скачать доп. woff2 и добавить @font-face по образцу.
 - Next: Round 11 Trend Engine (TrendSignal/TrendAdaptation, SIGNAL RADAR) — главный трек; дополнительно建议 git add public/fonts.
+
+---
+Task ID: 18 (incident: «не заходит на панель» — пароль owner)
+Agent: Z.ai Code (main)
+Task: Пользователь снова не мог войти в панель. Диагностика, серверный сброс пароля owner@haydev.am, E2E-верификация входа, фикс UX-дефекта со стейл-тостом «Brand not found».
+
+Work Log:
+- ДИАГНОЗ: сервер жив (GET / → 200), все API 200. В dev.log найдены 6 подряд POST /api/auth → 401 — попытки входа с неверным паролем. Аккаунт owner@haydev.am (Hayk Galstyan) цел; блокировок входа нет (emailVerified не требуется; rate-limit 15/мин не исчерпан). Корень: пользователь не помнит/не совпадает пароль, самообслуживание через «Забыли пароль?» не использовал.
+- СЕРВЕРНЫЙ СБРОС (scripts/reset-owner.ts, scrypt как в @/lib/auth): passwordHash → новый, resetToken/resetExpires → null, удалена 1 старая сессия (принудительный релогин), auditLog + «auth.serverReset» (actorType SYSTEM). Новый пароль: HayDev2026!
+- ВЕРИФИКАЦИЯ API: login с новым паролем → 200 + Set-Cookie (сессия до 30.10); неверный пароль → 401.
+- ВЕРИФИКАЦИЯ БРАУЗЕРОМ: logout → экран входа → login owner@haydev.am / HayDev2026! → панель «Բարի երեկո, Hayk Galstyan»; раздел «Բրենդներ» рендерит пустое состояние с CTA «Ստեղծել բրենդ»; footer показывает owner@haydev.am; скриншот /tmp/owner-panel.png. Консоль 0 ошибок.
+- UX-ФИКС (попутно найден и устранён): у аккаунта без брендов при stale localStorage.activeBrandId (чужой/удалённый бренд) сыпался тост «Brand not found» — выглядел как поломка.
+  - page.tsx bootstrap: persisted activeBrandId теперь валидируется по фактическому списку брендов /api/auth/me; невалидный молча лечится → первый бренд юзера или null (пустой workspace — норма, не ошибка).
+  - brands.tsx loadDetail: catch BRAND_NOT_FOUND → setActiveBrand(null) тихо, без тоста; остальные ошибки тостятся как раньше.
+- ЦЕЛОСТНОСТЬ: 4 юзера, 3 бренда (pilot/qa3/qa4 — демо-воркспейсы), ContentItem 53, GenerationJob 44 — ничего не потеряно. У owner данных нет не потому что потеряны: аккаунт зарегистрирован 29.09 22:14, бренд ни разу не создавался (это его первый вход по сути).
+- lint: 0 проблем.
+
+Stage Summary:
+- Доступ восстановлен полностью: owner@haydev.am / HayDev2026! (рекомендовать сменить в Картотеке→Настройки при желании; также работает «Забыли пароль?» self-service и кнопка «Մուտք դեմո աշխատատարածք» для демо-воркспейса qa4 с данными).
+- Stale activeBrandId больше не produces ложных ошибок — bootstrap самохилится.
+- Риск: пароль передан в чате — при production перейти на email-доставку reset-ссылок (SMTP-провайдер) и сменить пароль.
+- Next: Round 11 Trend Engine (TASK 15) — главный трек; session management UI — nice-to-have.

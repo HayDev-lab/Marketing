@@ -35,7 +35,14 @@ export default function Home() {
       if (data.brands) {
         setBrands(data.brands);
         const { activeBrandId: current } = useApp.getState();
-        if (data.brands.length && !current) setActiveBrand(data.brands[0].id);
+        // Heal a stale persisted brand id (other account / deleted brand):
+        // silently re-point to the first owned brand instead of 404-toasting later.
+        const currentValid = !!current && data.brands.some((b) => b.id === current);
+        if (data.brands.length) {
+          if (!currentValid) setActiveBrand(data.brands[0].id);
+        } else if (current) {
+          setActiveBrand(null);
+        }
       }
       if (data.autopilotEnabled !== undefined) setMode(data.autopilotEnabled ? "autopilot" : "manual");
     } catch {

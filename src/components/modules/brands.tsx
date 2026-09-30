@@ -133,7 +133,13 @@ export function BrandsModule(_props: { onBrandsChanged?: () => void }) {
       const full = await api<BrandFull>(`/api/brands/${id}`);
       setDetail(full);
     } catch (e) {
-      toast.error(errMessage(e));
+      const code = (e as Error & { code?: string }).code;
+      if (code === "BRAND_NOT_FOUND") {
+        // Stale id (deleted brand / other account) — heal silently, no scary toast.
+        useApp.getState().setActiveBrand(null);
+      } else {
+        toast.error(errMessage(e));
+      }
     } finally {
       setDetailLoading(false);
     }
