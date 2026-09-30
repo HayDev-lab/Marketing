@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit, ledger } from "@/lib/ledger";
+import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
 import { imageGenerate, saveAssetBase64, UPLOADS_DIR } from "@/lib/ai/zai";
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
     }
     const model = getProviderModel(route.providerId, route.modelId);
     const estimatedCost = model?.estimatedCostPerCall ?? 0.02;
+    await assertQuota(user.id, "IMAGE_GENERATION", estimatedCost);
     await ledger.assertBudget(user.id, estimatedCost);
 
     // Reference image (never lost — stored + recorded)

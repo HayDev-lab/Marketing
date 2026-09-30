@@ -22,6 +22,7 @@ import {
 import {
   Settings2, Bot, ScrollText, Wallet, RefreshCw, Loader2, Activity,
   ShieldCheck, ShieldAlert, ShieldX, CircleHelp, Zap, Sparkles, CheckCircle2, TriangleAlert, ListChecks, Eye, Radar,
+  CreditCard, Check, X,
 } from "lucide-react";
 
 // ===== types =====
@@ -111,15 +112,220 @@ export function SettingsModule(_props: { onBrandsChanged?: () => void }) {
       <Tabs defaultValue="providers" className="gap-4">
         <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-muted/30 p-1">
           <TabsTrigger value="providers" className="min-h-11 gap-1.5 px-3"><Activity className="h-4 w-4" aria-hidden /> {t("settings.tab.providers")}</TabsTrigger>
+          <TabsTrigger value="plan" className="min-h-11 gap-1.5 px-3"><CreditCard className="h-4 w-4" aria-hidden /> {t("settings.tab.plan")}</TabsTrigger>
           <TabsTrigger value="autopilot" className="min-h-11 gap-1.5 px-3"><Bot className="h-4 w-4" aria-hidden /> {t("settings.tab.autopilot")}</TabsTrigger>
           <TabsTrigger value="audit" className="min-h-11 gap-1.5 px-3"><ScrollText className="h-4 w-4" aria-hidden /> {t("settings.tab.audit")}</TabsTrigger>
           <TabsTrigger value="budget" className="min-h-11 gap-1.5 px-3"><Wallet className="h-4 w-4" aria-hidden /> {t("settings.tab.budget")}</TabsTrigger>
         </TabsList>
         <TabsContent value="providers"><ProvidersTab /></TabsContent>
+        <TabsContent value="plan"><PlanTab /></TabsContent>
         <TabsContent value="autopilot"><AutopilotTab /></TabsContent>
         <TabsContent value="audit"><AuditTab /></TabsContent>
         <TabsContent value="budget"><BudgetTab /></TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ===== Plan / Subscription tab (MASTER PROMPT §31) =====
+interface ModalityPolicyDto {
+  maxCostPerJob: number;
+  allowedQualityTiers: string[];
+  maxDurationSec?: number | null;
+  monthlyCountCap: number | null;
+  manualOverrideAllowed: boolean;
+}
+interface PlanConfigDto {
+  id: string;
+  monthlyCredits: number;
+  maxConcurrentJobs: number;
+  maxBrands: number;
+  features: { autopilot: boolean; mcp: boolean; avatar: boolean; publishing: boolean; analytics: boolean; advancedTrends: boolean };
+  policies: { image: ModalityPolicyDto; video: ModalityPolicyDto; tts: ModalityPolicyDto; transcription: ModalityPolicyDto };
+}
+interface SubscriptionDto {
+  subscription: { plan: string; status: string; billingCycle: string; startedAt: string; renewsAt: string | null };
+  usage: {
+    plan: string;
+    credits: { used: number; total: number; remaining: number };
+    runningJobs: number;
+    monthlyCounts: { image: number; video: number; tts: number; transcription: number };
+    brands: number;
+    renewsAt: string | null;
+  };
+  plans: Record<string, PlanConfigDto>;
+}
+
+const PLAN_FEATURE_KEYS: (keyof PlanConfigDto["features"])[] = ["autopilot", "mcp", "avatar", "publishing", "analytics", "advancedTrends"];
+const PLAN_MODALITIES: { key: keyof PlanConfigDto["policies"]; i18n: string }[] = [
+  { key: "image", i18n: "plan.modality.image" },
+  { key: "video", i18n: "plan.modality.video" },
+  { key: "tts", i18n: "plan.modality.tts" },
+  { key: "transcription", i18n: "plan.modality.transcription" },
+];
+
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function PlanTab() {
+  const { t } = useI18n();
+  const [data, setData] = useState<SubscriptionDto | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [switching, setSwitching] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setData(await api<SubscriptionDto>("/api/subscription"));
+    } catch (e) {
+      toast.error(errMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const switchTo = async (plan: string) => {
+    setSwitching(plan);
+    try {
+      await api("/api/subscription", { method: "POST", body: JSON.stringify({ action: "switch", plan }) });
+      toast.success(t("plan.switched", { plan }));
+      await load();
+    } catch (e) {
+      toast.error(errMessage(e));
+    } finally {
+      setSwitching(null);
+    }
+  };
+
+  if (loading && !data) {
+    return (
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Skeleton className="h-40 rounded-2xl bg-muted/40" />
+        <Skeleton className="h-40 rounded-2xl bg-muted/40" />
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const { usage, plans } = data;
+  const currentPlan = plans[usage.plan] ?? plans.FREE;
+  const creditsPct = Math.min(100, usage.credits.total > 0 ? (usage.credits.used / usage.credits.total) * 100 : 0);
+  const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
+
+  return (
+    <div className="grid gap-4">
+      {/* current usage */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
+            <span className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("plan.creditsTitle")}
+              <Badge variant="outline" className="border-[var(--neon)]/50 text-[var(--neon)]">{usage.plan}</Badge>
+            </span>
+            <span className="text-xs font-normal text-muted-foreground">{t("plan.renewsAt", { date: fmtDate(usage.renewsAt) })}</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-2">
+            <div className="flex items-baseline justify-between text-sm">
+              <span className="font-medium">{usage.credits.used.toFixed(2)} / {usage.credits.total.toFixed(2)}</span>
+              <span className="text-xs text-muted-foreground">{creditsPct.toFixed(0)}%</span>
+            </div>
+            <Progress value={creditsPct} aria-label={t("plan.creditsTitle")} className="h-2" />
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+              <p className="text-muted-foreground">{t("plan.running", { n: usage.runningJobs, max: currentPlan.maxConcurrentJobs })}</p>
+            </div>
+            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+              <p className="text-muted-foreground">{t("plan.brands", { n: usage.brands, max: currentPlan.maxBrands })}</p>
+            </div>
+            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+              <p className="text-muted-foreground">{t("plan.maxVideo", { sec: currentPlan.policies.video.maxDurationSec ?? 60 })}</p>
+            </div>
+          </div>
+          {/* per-modality monthly counters */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {PLAN_MODALITIES.map(({ key, i18n }) => {
+              const cap = currentPlan.policies[key].monthlyCountCap;
+              const used = usage.monthlyCounts[key as keyof SubscriptionDto["usage"]["monthlyCounts"]];
+              return (
+                <div key={key} className="rounded-lg border border-border/60 bg-muted/20 p-2.5 text-center">
+                  <p className="text-[11px] text-muted-foreground">{t(i18n)}</p>
+                  <p className="mt-0.5 text-sm font-medium">
+                    {cap === null ? t("plan.unlimited") : t("plan.countOf", { n: used, cap })}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* honest sandbox note */}
+      <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200/90">
+        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        <span>{t("plan.sandboxNote")}</span>
+      </div>
+
+      {/* plan matrix */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {Object.values(plans).map((p) => {
+          const isCurrent = p.id === usage.plan;
+          return (
+            <Card key={p.id} className={`glass rounded-2xl ${isCurrent ? "neon-border border-[var(--neon)]/40" : ""}`}>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center justify-between text-base">
+                  {p.id}
+                  {isCurrent && (
+                    <Badge className="bg-[var(--neon)] text-black hover:bg-[var(--neon)]">{t("plan.currentBadge")}</Badge>
+                  )}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">{t("plan.monthlyCredits", { n: p.monthlyCredits })}</p>
+              </CardHeader>
+              <CardContent className="grid gap-3 text-xs">
+                <ul className="grid gap-1.5 text-muted-foreground">
+                  <li>{t("plan.running", { n: 0, max: p.maxConcurrentJobs })}</li>
+                  <li>{t("plan.brands", { n: 0, max: p.maxBrands })}</li>
+                  <li>{t("plan.maxVideo", { sec: p.policies.video.maxDurationSec ?? 60 })}</li>
+                  {PLAN_MODALITIES.slice(0, 2).map(({ key, i18n }) => (
+                    <li key={key}>
+                      {t(i18n)}: {p.policies[key].monthlyCountCap === null ? t("plan.unlimited") : t("plan.countOf", { n: 0, cap: p.policies[key].monthlyCountCap as number })}
+                    </li>
+                  ))}
+                </ul>
+                <div>
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("plan.features")}</p>
+                  <ul className="grid gap-1">
+                    {PLAN_FEATURE_KEYS.map((f) => (
+                      <li key={f} className={`flex items-center gap-1.5 ${p.features[f] ? "text-foreground" : "text-muted-foreground/50"}`}>
+                        {p.features[f]
+                          ? <Check className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />
+                          : <X className="h-3.5 w-3.5" aria-hidden />}
+                        {t(`plan.feature.${f}`)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <Button
+                  size="sm"
+                  variant={isCurrent ? "secondary" : "default"}
+                  disabled={isCurrent || switching !== null}
+                  onClick={() => switchTo(p.id)}
+                  className="min-h-11"
+                >
+                  {switching === p.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : isCurrent ? t("plan.currentBadge") : t("plan.switchBtn")}
+                </Button>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

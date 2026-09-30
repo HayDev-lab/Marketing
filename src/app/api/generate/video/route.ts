@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit, ledger } from "@/lib/ledger";
+import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
 import { videoSubmit, llmCompleteJson } from "@/lib/ai/zai";
@@ -34,6 +35,7 @@ export async function POST(req: NextRequest) {
       if (!route) throw new ApiError(503, "NO_PROVIDER", "No video provider available");
       const model = getProviderModel(route.providerId, route.modelId);
       const estimatedCost = model?.estimatedCostPerCall ?? 0.1;
+      await assertQuota(user.id, "VIDEO_GENERATION", estimatedCost, { videoDurationSec: Math.ceil(scene.durationSec) });
       await ledger.assertBudget(user.id, estimatedCost);
 
       const { job } = await jobs.create({

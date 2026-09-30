@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit, ledger } from "@/lib/ledger";
+import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability } from "@/lib/ai/registry";
 import { ttsGenerate, saveAssetBase64, llmComplete } from "@/lib/ai/zai";
@@ -50,6 +51,8 @@ export async function POST(req: NextRequest) {
       throw new ApiError(503, "PROVIDER_BLOCKED", `Provider ${route.providerId}: ${route.status ?? ""} — external API key not configured. Use the available provider or configure the key in Settings.`);
     }
 
+    const estimatedCost = 0.005;
+    await assertQuota(user.id, "TTS", estimatedCost);
     const { job } = await jobs.create({
       userId: user.id,
       kind: "TTS",
@@ -58,7 +61,7 @@ export async function POST(req: NextRequest) {
       input: { text, voice: body.voice, speed },
       idempotencyKey: body.idempotencyKey ? String(body.idempotencyKey) : undefined,
       brandId: body.brandId ?? undefined,
-      estimatedCost: 0.005,
+      estimatedCost,
     });
     if (job.status === "COMPLETED" && job.resultAssetId) {
       return ok({ jobId: job.id, assetId: job.resultAssetId, deduplicated: true });

@@ -544,3 +544,27 @@ Stage Summary:
 - Demo-вход тоже сохраняет токен — 3 клика подряд больше не нужны.
 - Риски: token в localStorage — приемлемый trade-off для sandbox (XSS-поверхность минимальна, скриптов третьих сторон нет); в production — SameSite=None;Secure за HTTPS + короткоживущие refresh-токены.
 - Next: Round 11 Trend Engine (TASK 15) — главный трек разработки.
+
+---
+Task ID: 20 (MASTER PROMPT: CURRENT_STATE.md + §31 Subscriptions end-to-end)
+Agent: Z.ai Code (main)
+Task: Пользователь прислал Master Prompt Pack (upload/Pasted Content_1790802969188.txt) с командой «Начинай реализацию!». По §0 спецификации выполнен аудит текущего состояния (CURRENT_STATE.md), определён самый большой чистый gap — §31 Subscriptions (FREE/CREATOR/PRO/BUSINESS + кредитные квоты + модальностные политики) — и реализован end-to-end.
+
+Work Log:
+- АУДИТ: составлен CURRENT_STATE.md (что работает/что частично/чего нет/что опасно менять). Проверены все 33 Prisma-модели, 46 API-роутов, UI-модули. Движок трендов (§10-11), durable jobs, студии, MCP, publishing — уже работают (раунды 1-10). Полностью отсутствовали: §31 Subscriptions (нет модели/API/UI); §24 Avatar; §20-21 Music gen; email-доставка.
+- SCHEMA: модель Subscription (userId unique, plan, status, billingCycle, startedAt, renewsAt, canceledAt, metaJson) + связь User.subscription; `bun run db:push` OK.
+- LIB (src/lib/subscription.ts): PLANS-конфиг 4 тарифов (monthlyCredits 5/30/120/500, maxConcurrentJobs 1/3/6/12, maxBrands 1/3/10/50, features-матрица autopilot/mcp/avatar/publishing/analytics/advancedTrends); ModalityPolicy по §31.3 (maxCostPerJob, allowedQualityTiers, maxDurationSec, monthlyCountCap, manualOverrideAllowed) — тарифы НЕ привязаны к именам моделей (spec requirement); getSubscription (ленивое создание FREE), getUsage (реальные данные из CostLedger за календарный месяц + PENDING/RUNNING jobs + бренды), assertQuota (402 QUOTA_EXCEEDED с details: reason/plan/limit/upgradeTo — credits | cost_per_job | monthly_count | duration | concurrency), assertBrandQuota, switchPlan (честный sandbox-switch: paymentProvider:"none" в metaJson).
+- API /api/subscription: GET (subscription + usage + plans-матрица), POST switch (валидация, audit "subscription.switched").
+- ENFORCEMENT: assertQuota встроен в generate/image (IMAGE_GENERATION), generate/video (+videoDurationSec per-scene), generate/tts; assertBrandQuota в brands POST. Порядок: assertQuota → ledger.assertBudget.
+- UI: Settings → новая вкладка «Տարիֆ» (PlanTab): карточка usage (credits progress, running/brands/video-limits, 4 модальностных счётчика), честная amber-нота об отсутствии платёжного процессора, матрица 4 тарифов (feature-list с Check/X, лимиты, кнопка Switch c disabled для текущего). i18n: +36 ключей × 3 локали (settings.tab.plan, plan.*).
+- FIX по ходу: errMessage хелпер добавлен в settings.tsx (использовался, но не был определён); dev-сервер перезапущен для подхвата regen Prisma client (bun run dev через subshell background).
+- ВЕРИФИКАЦИЯ:
+  - curl: GET subscription → FREE 5 кредитов, счётчики нули; switch→PRO → 200, credits.total=120; BAD plan → 400; unauthorized → 401; switch→FREE → blocked-математика подтверждена скриптом scripts/verify-quota.ts (FREE: video $0.3 blocked по cost_per_job 0.2, $0.1 allowed; PRO: $0.3 allowed).
+  - Браузер: вкладка «Տարիֆ» рендерит usage-карточку + 4 плана; клик switch→CREATOR → тост «Տարիֆը փոխվեց՝ CREATOR», текущий бейдж переехал; switch→BUSINESS → OWNER оставлен на BUSINESS (500 кредитов, 12 concurrent, 50 брендов — внутренний доступ владельца платформы §31.5); консоль 0 ошибок; скриншот /tmp/plan-tab.png.
+  - lint 0, tsc src/ 0.
+
+Stage Summary:
+- §31 Subscriptions полностью реализован: тарифная матрица, кредитные квоты от реального CostLedger, модальностные политики по спеке (без привязки к моделям), честный sandbox-switch, UI в Settings, i18n ×3.
+- Квотные 402-ошибки surfaced клиенту через существующий toast-конвейер (errMessage + code).
+- Остатки гап-листа (для следующих раундов): §24 Talking Avatar (plugin-провайдер), §20-21 Music upload/generation, §30 внутренний admin-view, SMTP для reset-писем.
+- CURRENT_STATE.md — актуальная карта состояния проекта.

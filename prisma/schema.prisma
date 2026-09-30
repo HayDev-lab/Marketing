@@ -43,6 +43,7 @@ model User {
   mcpTokens          McpToken[]
   analyticsSnapshots AnalyticsSnapshot[]
   insights           LearningInsight[]
+  subscription       Subscription?
 }
 
 model Session {
@@ -550,6 +551,27 @@ model AuditLog {
 }
 
 // ============ AUTOPILOT ============
+
+// ============ SUBSCRIPTIONS (§31) ============
+// Four public plans: FREE | CREATOR | PRO | BUSINESS.
+// Plan configuration (credits, caps, modality policies) lives in
+// src/lib/subscription.ts — configuration-driven, never hardcoded in UI.
+// Billing processor: none in this environment — plan switches are honest
+// sandbox switches (instant, audit-logged, metaJson records that).
+model Subscription {
+  id         String    @id @default(cuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id])
+  plan       String    @default("FREE") // FREE | CREATOR | PRO | BUSINESS
+  status     String    @default("ACTIVE") // ACTIVE | CANCELED
+  billingCycle String  @default("MONTHLY")
+  startedAt  DateTime  @default(now())
+  renewsAt   DateTime?
+  canceledAt DateTime?
+  metaJson   String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
 
 model AutopilotPolicy {
   id                    String  @id @default(cuid())

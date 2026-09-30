@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit } from "@/lib/ledger";
+import { assertBrandQuota } from "@/lib/subscription";
 
 // GET /api/brands — list user's brands
 export async function GET() {
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
     if (name.length > 120) throw new ApiError(400, "VALIDATION", "Brand name too long");
     const website = body.website ? String(body.website).trim() : null;
     if (website && !/^https?:\/\//.test(website)) throw new ApiError(400, "VALIDATION", "Website must start with http(s)://");
+    await assertBrandQuota(user.id); // plan-based brand cap (§31)
     const brand = await db.brand.create({
       data: {
         userId: user.id,
