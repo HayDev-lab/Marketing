@@ -141,7 +141,7 @@ interface PlanConfigDto {
   maxConcurrentJobs: number;
   maxBrands: number;
   features: { autopilot: boolean; mcp: boolean; avatar: boolean; publishing: boolean; analytics: boolean; advancedTrends: boolean };
-  policies: { image: ModalityPolicyDto; video: ModalityPolicyDto; tts: ModalityPolicyDto; transcription: ModalityPolicyDto };
+  policies: { image: ModalityPolicyDto; video: ModalityPolicyDto; tts: ModalityPolicyDto; transcription: ModalityPolicyDto; music: ModalityPolicyDto };
 }
 interface SubscriptionDto {
   subscription: { plan: string; status: string; billingCycle: string; startedAt: string; renewsAt: string | null };
@@ -149,7 +149,7 @@ interface SubscriptionDto {
     plan: string;
     credits: { used: number; total: number; remaining: number };
     runningJobs: number;
-    monthlyCounts: { image: number; video: number; tts: number; transcription: number };
+    monthlyCounts: { image: number; video: number; tts: number; transcription: number; music: number };
     brands: number;
     renewsAt: string | null;
   };
@@ -162,6 +162,7 @@ const PLAN_MODALITIES: { key: keyof PlanConfigDto["policies"]; i18n: string }[] 
   { key: "video", i18n: "plan.modality.video" },
   { key: "tts", i18n: "plan.modality.tts" },
   { key: "transcription", i18n: "plan.modality.transcription" },
+  { key: "music", i18n: "plan.modality.music" },
 ];
 
 function errMessage(e: unknown): string {

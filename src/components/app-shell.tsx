@@ -13,6 +13,7 @@ import { PromptLibraryModule } from "@/components/modules/prompt-library";
 import { ImageStudioModule } from "@/components/modules/image-studio";
 import { VideoStudioModule } from "@/components/modules/video-studio";
 import { VoiceModule } from "@/components/modules/voice";
+import { MusicModule } from "@/components/modules/music-studio";
 import { PublishingModule } from "@/components/modules/publishing";
 import { AnalyticsModule } from "@/components/modules/analytics";
 import { SettingsModule } from "@/components/modules/settings";
@@ -23,7 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   LayoutDashboard, Building2, Flame, CalendarRange, FileStack, Library,
-  ImageIcon, Clapperboard, AudioLines, Send, BarChart3, Settings, Plug, LogOut, Menu, X, Search,
+  ImageIcon, Clapperboard, AudioLines, Music4, Send, BarChart3, Settings, Plug, LogOut, Menu, X, Search,
 } from "lucide-react";
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
 import { CommandPalette, openCommandPalette } from "@/components/command-palette";
@@ -42,6 +43,7 @@ const NAV: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key:
   { id: "image", icon: ImageIcon, key: "nav.image" },
   { id: "video", icon: Clapperboard, key: "nav.video" },
   { id: "voice", icon: AudioLines, key: "nav.voice" },
+  { id: "music", icon: Music4, key: "nav.music" },
   { id: "publishing", icon: Send, key: "nav.publishing" },
   { id: "analytics", icon: BarChart3, key: "nav.analytics" },
   { id: "settings", icon: Settings, key: "nav.settings" },
@@ -82,6 +84,7 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
       case "image": return <ImageStudioModule />;
       case "video": return <VideoStudioModule />;
       case "voice": return <VoiceModule />;
+      case "music": return <MusicModule />;
       case "publishing": return <PublishingModule />;
       case "analytics": return <AnalyticsModule />;
       case "settings": return <SettingsModule />;

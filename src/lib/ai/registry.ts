@@ -203,6 +203,29 @@ export const PROVIDER_REGISTRY: ProviderDescriptor[] = [
     supportsHealthCheck: false,
   },
   {
+    providerId: "haydev-synth",
+    title: "HayDev Synth (built-in composer)",
+    category: "Music",
+    capabilities: ["MUSIC_GENERATION"],
+    models: [
+      {
+        id: "synth-v1",
+        title: "Algorithmic Composer v1",
+        capabilities: ["MUSIC_GENERATION"],
+        constraints: {
+          durationsSec: [10, 15, 20, 30, 45, 60],
+          languages: [],
+        },
+        estimatedCostPerCall: 0,
+        latencyClass: "fast",
+      },
+    ],
+    status: "IMPLEMENTED_NOT_LIVE_VERIFIED",
+    statusNote: "Built-in algorithmic composer: renders real WAV audio locally (instrumental only — no vocals/lyrics). No external API, zero cost.",
+    supportsHealthCheck: false,
+    defaultModel: "synth-v1",
+  },
+  {
     providerId: "elevenlabs",
     title: "ElevenLabs (Voice Clone / Music)",
     category: "VoiceClone",

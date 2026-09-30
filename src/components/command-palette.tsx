@@ -13,6 +13,7 @@ import {
 import { useApp, type ViewId } from "@/lib/store";
 import { useI18n } from "@/lib/use-i18n";
 import type { Locale } from "@/lib/i18n";
+import { Music4 } from "lucide-react";
 
 const NAV_ITEMS: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key: string; shortcut: string }[] = [
   { id: "dashboard", icon: LayoutDashboard, key: "nav.dashboard", shortcut: "G D" },
@@ -24,6 +25,7 @@ const NAV_ITEMS: { id: ViewId; icon: React.ComponentType<{ className?: string }>
   { id: "image", icon: ImageIcon, key: "nav.image", shortcut: "G I" },
   { id: "video", icon: Clapperboard, key: "nav.video", shortcut: "G V" },
   { id: "voice", icon: AudioLines, key: "nav.voice", shortcut: "G O" },
+  { id: "music", icon: Music4, key: "nav.music", shortcut: "G U" },
   { id: "publishing", icon: Send, key: "nav.publishing", shortcut: "G S" },
   { id: "analytics", icon: BarChart3, key: "nav.analytics", shortcut: "G A" },
   { id: "settings", icon: Settings, key: "nav.settings", shortcut: "G ," },
@@ -69,7 +71,7 @@ export function CommandPalette() {
         const letter = e.key.toLowerCase();
         const map: Record<string, ViewId> = {
           d: "dashboard", b: "brands", t: "trends", p: "planner", c: "content",
-          l: "prompts", i: "image", v: "video", o: "voice", s: "publishing",
+          l: "prompts", i: "image", v: "video", o: "voice", u: "music", s: "publishing",
           a: "analytics", ",": "settings", m: "mcp",
         };
         gArmed = false;

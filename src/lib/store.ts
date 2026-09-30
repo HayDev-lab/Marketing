@@ -14,6 +14,7 @@ export type ViewId =
   | "image"
   | "video"
   | "voice"
+  | "music"
   | "publishing"
   | "analytics"
   | "settings"

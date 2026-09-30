@@ -8,13 +8,14 @@ import { publishing } from "./dicts/publishing";
 import { settings } from "./dicts/settings";
 import { mcp } from "./dicts/mcp";
 import { autopilot } from "./dicts/autopilot";
+import { music } from "./dicts/music";
 
 export type Locale = "hy" | "ru" | "en";
 export const LOCALES: Locale[] = ["hy", "ru", "en"];
 export const LOCALE_LABELS: Record<Locale, string> = { hy: "Հայերեն", ru: "Русский", en: "English" };
 export type Dict = Record<string, string>;
 
-const MODULES: Record<Locale, Dict>[] = [core, brands, trends, planner, studio, analytics, publishing, settings, mcp, autopilot];
+const MODULES: Record<Locale, Dict>[] = [core, brands, trends, planner, studio, analytics, publishing, settings, mcp, autopilot, music];
 
 export const DICTIONARIES: Record<Locale, Dict> = {
   hy: Object.assign({}, ...MODULES.map((m) => m.hy)),

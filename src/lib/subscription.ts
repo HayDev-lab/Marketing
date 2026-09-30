@@ -45,6 +45,7 @@ export interface PlanConfig {
     video: ModalityPolicy;
     tts: ModalityPolicy;
     transcription: ModalityPolicy;
+    music: ModalityPolicy;
   };
 }
 
@@ -60,6 +61,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
       video: { maxCostPerJob: 0.2, allowedQualityTiers: ["cost"], maxDurationSec: 15, monthlyCountCap: 4, manualOverrideAllowed: false },
       tts: { maxCostPerJob: 0.02, allowedQualityTiers: ["cost"], monthlyCountCap: 60, manualOverrideAllowed: false },
       transcription: { maxCostPerJob: 0.02, allowedQualityTiers: ["cost"], monthlyCountCap: 30, manualOverrideAllowed: false },
+      music: { maxCostPerJob: 0.02, allowedQualityTiers: ["cost"], monthlyCountCap: 20, manualOverrideAllowed: false },
     },
   },
   CREATOR: {
@@ -73,6 +75,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
       video: { maxCostPerJob: 0.6, allowedQualityTiers: ["cost", "balanced"], maxDurationSec: 30, monthlyCountCap: 30, manualOverrideAllowed: true },
       tts: { maxCostPerJob: 0.05, allowedQualityTiers: ["cost", "balanced"], monthlyCountCap: 400, manualOverrideAllowed: true },
       transcription: { maxCostPerJob: 0.05, allowedQualityTiers: ["cost", "balanced"], monthlyCountCap: 200, manualOverrideAllowed: true },
+      music: { maxCostPerJob: 0.05, allowedQualityTiers: ["cost", "balanced"], monthlyCountCap: 100, manualOverrideAllowed: true },
     },
   },
   PRO: {
@@ -86,6 +89,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
       video: { maxCostPerJob: 2, allowedQualityTiers: ["cost", "balanced", "premium"], maxDurationSec: 60, monthlyCountCap: 120, manualOverrideAllowed: true },
       tts: { maxCostPerJob: 0.2, allowedQualityTiers: ["cost", "balanced", "premium"], monthlyCountCap: 1500, manualOverrideAllowed: true },
       transcription: { maxCostPerJob: 0.2, allowedQualityTiers: ["cost", "balanced", "premium"], monthlyCountCap: 800, manualOverrideAllowed: true },
+      music: { maxCostPerJob: 0.2, allowedQualityTiers: ["cost", "balanced", "premium"], monthlyCountCap: 400, manualOverrideAllowed: true },
     },
   },
   BUSINESS: {
@@ -99,6 +103,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
       video: { maxCostPerJob: 8, allowedQualityTiers: ["cost", "balanced", "premium"], maxDurationSec: 60, monthlyCountCap: null, manualOverrideAllowed: true },
       tts: { maxCostPerJob: 1, allowedQualityTiers: ["cost", "balanced", "premium"], monthlyCountCap: null, manualOverrideAllowed: true },
       transcription: { maxCostPerJob: 1, allowedQualityTiers: ["cost", "balanced", "premium"], monthlyCountCap: null, manualOverrideAllowed: true },
+      music: { maxCostPerJob: 1, allowedQualityTiers: ["cost", "balanced", "premium"], monthlyCountCap: null, manualOverrideAllowed: true },
     },
   },
 };
@@ -108,6 +113,7 @@ const CAPABILITY_TO_MODALITY: Record<string, keyof PlanConfig["policies"]> = {
   VIDEO_GENERATION: "video",
   TTS: "tts",
   TRANSCRIPTION: "transcription",
+  MUSIC_GENERATION: "music",
 };
 
 export function isPlanId(v: string): v is PlanId {
@@ -130,7 +136,7 @@ export interface SubscriptionUsage {
   plan: PlanId;
   credits: { used: number; total: number; remaining: number };
   runningJobs: number;
-  monthlyCounts: { image: number; video: number; tts: number; transcription: number };
+  monthlyCounts: { image: number; video: number; tts: number; transcription: number; music: number };
   brands: number;
   periodStart: string;
   renewsAt: string | null;
@@ -140,7 +146,7 @@ export interface SubscriptionUsage {
 export async function getUsage(userId: string, plan: PlanId): Promise<SubscriptionUsage> {
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const [monthAgg, counts, runningJobs, brandCount] = await Promise.all([
+  const [monthAgg, counts, runningJobs, brandCount, musicJobs] = await Promise.all([
     db.costLedger.aggregate({ _sum: { estimatedCost: true }, where: { userId, createdAt: { gte: startOfMonth } } }),
     db.costLedger.groupBy({
       by: ["capability"],
@@ -149,9 +155,13 @@ export async function getUsage(userId: string, plan: PlanId): Promise<Subscripti
     }),
     db.generationJob.count({ where: { userId, status: { in: ["PENDING", "RUNNING"] } } }),
     db.brand.count({ where: { userId } }),
+    // Music is free (built-in synth) → CostLedger has no rows; count real jobs instead.
+    db.generationJob.count({
+      where: { userId, kind: "MUSIC", createdAt: { gte: startOfMonth }, status: { notIn: ["FAILED", "CANCELLED", "DRAFT"] } },
+    }),
   ]);
   const used = monthAgg._sum.estimatedCost ?? 0;
-  const monthlyCounts = { image: 0, video: 0, tts: 0, transcription: 0 };
+  const monthlyCounts = { image: 0, video: 0, tts: 0, transcription: 0, music: musicJobs };
   for (const row of counts) {
     const modality = CAPABILITY_TO_MODALITY[row.capability];
     if (modality) monthlyCounts[modality] = row._count._all;

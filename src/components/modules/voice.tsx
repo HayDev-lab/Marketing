@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
-  AudioLines, Loader2, Save, Music, UserSquare, Ban, History, BookmarkCheck,
+  AudioLines, Loader2, Save, Music, Music4, UserSquare, Ban, History, BookmarkCheck,
   Mic, FileAudio, Copy, X, Check,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
@@ -64,7 +64,6 @@ export function VoiceModule() {
   const asrInputRef = useRef<HTMLInputElement>(null);
 
   // honest registry statuses (BLOCKED_EXTERNAL honesty is a product requirement)
-  const musicProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "elevenlabs");
   const avatarProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "heygen");
   const asrProvider = PROVIDER_REGISTRY.find((p) => p.providerId === "zai-asr");
 
@@ -332,32 +331,46 @@ export function VoiceModule() {
             </CardContent>
           </Card>
 
-          {/* honest blocked capability cards */}
-          {[
-            { icon: Music, neon: "var(--neon-3)", title: t("studio.voc.music"), provider: musicProvider },
-            { icon: UserSquare, neon: "var(--neon)", title: t("studio.voc.avatar"), provider: avatarProvider },
-          ].map(({ icon: Icon, neon, title, provider }) => (
-            <Card key={title} className="glass rounded-2xl opacity-90">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                  <Icon className="h-4 w-4" style={{ color: neon }} /> {title}
-                  <Badge variant="destructive" className="gap-1 text-[10px]"><Ban className="h-3 w-3" /> {t("studio.voc.blocked")}</Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-2">
-                <p className="text-xs leading-relaxed text-muted-foreground">{t("studio.voc.blockedNote")}</p>
-                {provider?.statusNote && (
-                  <p className="rounded-lg border border-border/60 bg-muted/20 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
-                    {provider.status}: {provider.statusNote}
-                  </p>
-                )}
-                <Textarea disabled rows={2} placeholder={t("studio.voc.disabledHint")} aria-label={t("studio.voc.disabledHint")} className="resize-none opacity-50" />
-                <Button disabled className="min-h-11 gap-2 opacity-50">
-                  <Ban className="h-4 w-4" /> {t("common.generate")}
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
+          {/* honest capability cards: music → live module, avatar → still blocked */}
+          <Card className="glass rounded-2xl">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <Music className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.voc.music")}
+                <Badge variant="outline" className="gap-1 border-[var(--neon)]/40 text-[10px] text-[var(--neon)]">
+                  <Check className="h-3 w-3" /> {t("studio.voc.available")}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              <p className="text-xs leading-relaxed text-muted-foreground">{t("studio.voc.musicNote")}</p>
+              <Button
+                onClick={() => useApp.getState().setView("music")}
+                className="min-h-11 gap-2 font-semibold"
+              >
+                <Music4 className="h-4 w-4" /> {t("studio.voc.openMusic")}
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="glass rounded-2xl opacity-90">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <UserSquare className="h-4 w-4 text-[var(--neon)]" /> {t("studio.voc.avatar")}
+                <Badge variant="destructive" className="gap-1 text-[10px]"><Ban className="h-3 w-3" /> {t("studio.voc.blocked")}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              <p className="text-xs leading-relaxed text-muted-foreground">{t("studio.voc.blockedNote")}</p>
+              {avatarProvider?.statusNote && (
+                <p className="rounded-lg border border-border/60 bg-muted/20 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                  {avatarProvider.status}: {avatarProvider.statusNote}
+                </p>
+              )}
+              <Textarea disabled rows={2} placeholder={t("studio.voc.disabledHint")} aria-label={t("studio.voc.disabledHint")} className="resize-none opacity-50" />
+              <Button disabled className="min-h-11 gap-2 opacity-50">
+                <Ban className="h-4 w-4" /> {t("common.generate")}
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       </div>
 
