@@ -13,7 +13,7 @@ import {
 import { useApp, type ViewId } from "@/lib/store";
 import { useI18n } from "@/lib/use-i18n";
 import type { Locale } from "@/lib/i18n";
-import { Music4 } from "lucide-react";
+import { Music4, ShieldCheck } from "lucide-react";
 
 const NAV_ITEMS: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key: string; shortcut: string }[] = [
   { id: "dashboard", icon: LayoutDashboard, key: "nav.dashboard", shortcut: "G D" },
@@ -30,6 +30,7 @@ const NAV_ITEMS: { id: ViewId; icon: React.ComponentType<{ className?: string }>
   { id: "publishing", icon: Send, key: "nav.publishing", shortcut: "G S" },
   { id: "analytics", icon: BarChart3, key: "nav.analytics", shortcut: "G A" },
   { id: "settings", icon: Settings, key: "nav.settings", shortcut: "G ," },
+  { id: "admin", icon: ShieldCheck, key: "nav.admin", shortcut: "G X" }, // §30 — admins only (filtered below)
   { id: "mcp", icon: Plug, key: "nav.mcp", shortcut: "G M" },
 ];
 
@@ -47,6 +48,11 @@ export function CommandPalette() {
   const mode = useApp((s) => s.mode);
   const setMode = useApp((s) => s.setMode);
   const { t, locale, setLocale } = useI18n();
+  const isAdmin = useApp((s) => s.user)?.isAdmin === true;
+  const navItems = useMemo(
+    () => NAV_ITEMS.filter((item) => item.id !== "admin" || isAdmin),
+    [isAdmin]
+  );
 
   // ⌘K / Ctrl+K toggles the palette; "g<letter>" jumps between modules
   useEffect(() => {
@@ -78,7 +84,7 @@ export function CommandPalette() {
         gArmed = false;
         setSeq("");
         if (gTimer) clearTimeout(gTimer);
-        if (map[letter]) {
+        if (map[letter] && (map[letter] !== "admin" || isAdmin)) {
           e.preventDefault();
           setView(map[letter]);
         }
@@ -89,7 +95,7 @@ export function CommandPalette() {
       window.removeEventListener("keydown", onKey);
       if (gTimer) clearTimeout(gTimer);
     };
-  }, [open, setView]);
+  }, [open, setView, isAdmin]);
 
   // expose an opener for the top bar button
   useEffect(() => {
@@ -100,7 +106,7 @@ export function CommandPalette() {
 
   const navGroups = useMemo(() => (
     <CommandGroup heading={t("cmd.navigate")}>
-      {NAV_ITEMS.map((item) => (
+      {navItems.map((item) => (
         <CommandItem
           key={item.id}
           value={t(item.key) + " " + item.id}
@@ -114,7 +120,7 @@ export function CommandPalette() {
         </CommandItem>
       ))}
     </CommandGroup>
-  ), [t, setView, view]);
+  ), [t, setView, view, navItems]);
 
   const actionGroups = useMemo(() => (
     <>

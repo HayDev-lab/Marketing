@@ -19,6 +19,7 @@ export type ViewId =
   | "publishing"
   | "analytics"
   | "settings"
+  | "admin"
   | "mcp";
 
 // Marketing Signal Core states — the WebGL heart reacts to these

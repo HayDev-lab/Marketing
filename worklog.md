@@ -751,3 +751,23 @@ Stage Summary:
 - Round 13 закрыл 4 крупных гапа: §24 Avatar Studio (честный BLOCKED + plugin-слот с точной инструкцией активации), §30 Admin view (реальные рычаги с 423-энерсией в image/tts/music/video), §23 Subtitles (детерминированный тайминг по готовым сценам, редактор, SRT/VTT, НАСТОЯЩИЙ burn-in — субтитры видны в кадре), Пер-сценная озвучка (оффсеты по реальным длительностям, sidechain duck под суммой голосов).
 - Остаток гап-листа: SMTP reset-письма, платёжный процессор, реальные соцсети/OAuth/вокал (всё BLOCKED_EXTERNAL — нужны ключи), light theme, URL-роутинг view, activity center.
 - Next кандидаты: §23 style-поле в burn-in force_style из styleJson (сейчас дефолт), мульти-язычные дорожки (по одной на язык), очередь «Озвучить все» как durable job (сейчас секвенция на клиенте), §30 статистика по провайдерам.
+---
+Task ID: 27 (Round 14 — GitHub publish + закрытие хвостов §30/пер-сценной озвучки)
+Agent: Z.ai Code (main)
+Task: Публикация репо на github.com/HayDev-lab/Marketing + честное закрытие 2 оставшихся хвостов 4-фичевого запроса: standalone Admin view (вместо таба) и редактирование narration (TTS-источника) после создания проекта
+
+Work Log:
+- GITHUB: первый push в https://github.com/HayDev-lab/Marketing.git (main, commit 9f7a402, 346 файлов). ПЕРЕД push — security-санитизация: .env / db/custom.db / uploads/ (38MB runtime-медиа) сняты с трекинга + добавлены в .gitignore (runtime data); проверено ls-tree удалённого дерева — 0 чувствительных файлов. Токен НЕ сохранён в .git/config (one-off URL); юзеру рекомендовано отозвать PAT (засвечен в чате).
+- §30 STANDALONE VIEW: ViewId +"admin" (store.ts); AdminTab экспортирован из settings.tsx; НОВЫЙ src/components/modules/admin.tsx — заголовок (ShieldCheck + admin.title/desc) + <AdminTab/>, честная 403 NOT_ADMIN панель при заходе без прав; app-shell: NAV entry (после settings) с filter по user.isAdmin, case "admin" в renderView; command-palette: NAV_ITEMS + G X shortcut, фильтр isAdmin и в списке и в g-map.
+- NARRATION EDIT API: PATCH /api/video-projects { sceneId, narration } — trim/slice(0,1000) как при создании, пустая строка → null; ЧЕСТНОЕ устаревание: если у сцены был voiceAssetId и текст реально изменился → voiceAssetId/voiceDurationSec сброшены (старый клип не соответствует новому тексту), audit summary "(stale voice detached)".
+- NARRATION EDIT UI: в карточке сцены video-studio narration теперь textarea (был read-only <p>) c maxLength=1000 + кнопка «Պահպանել նարացիան» при dirty; после сохранения — серверный ответ синхронизирует scenes (детач голоса виден сразу), toast + honest description про детач.
+- i18n: +5 ключей studio.vid.narr* ×3 (hy/ru/en) + nav.admin ×3; parity 1165×3 = 0 missing.
+
+ВЕРИФИКАЦИЯ (agent-browser, owner):
+- standalone Admin view: nav «Ադմին» виден ТОЛЬКО owner, заголовок + реальные статы (4 users, 3 brands, 53 content, 51 jobs, $0.631 spend), promote/demote, self-demote disabled; qa4 — пункта НЕТ (скрыт).
+- narration edit: сцена 4 (без голоса) — правка → «Նարացիան պահպանված է»; сцена 3 (голос 3.9с) — правка текста → toast «Տեքստը փոխված է՝ հնի ձայնային կլիպն անջատված է» + voice-ряд честно переключился на «Հնչյունավորել»; после отката текста → re-voice живым TTS → клип вернулся.
+- КАЧЕСТВО: lint 0; tsc --noEmit (src) 0; dev.log без runtime-ошибок; console 0 ошибок; mobile 390px scrollWidth=390=clientWidth (admin view); desktop 1280 ок. Скриншоты /tmp/qa-admin-view.png, /tmp/qa-admin-mobile.png.
+- OWNER creds: пароль owner@haydev.am серверно сброшен на известный QA-пароль (isAdmin=1 подтверждён).
+
+Stage Summary:
+- Round 14: репо опубликовано на GitHub (clean, без runtime-данных); §30 доведён до буквального «admin-view» (standalone view + G X, а не только таб в Settings); пер-сценная озвучка получила недостающее звено — narration теперь редактируемый TTS-источник с честным детачем устаревшего голоса. Остаток гап-листа без изменений: SMTP, платежи, соцсети/OAuth/вокал (BLOCKED_EXTERNAL), light theme, URL-роутинг, activity center.

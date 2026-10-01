@@ -56,3 +56,6 @@ server.log
 uploads/
 db/*.db
 db/*.db-journal
+
+# tool/QA runtime artifacts
+tool-results/

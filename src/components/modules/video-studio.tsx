@@ -117,6 +117,8 @@ export function VideoStudioModule() {
   const [scripting, setScripting] = useState(false);
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
   const [savingPrompt, setSavingPrompt] = useState<string | null>(null);
+  const [narrDrafts, setNarrDrafts] = useState<Record<string, string>>({});
+  const [savingNarr, setSavingNarr] = useState<string | null>(null);
   const [sceneBusy, setSceneBusy] = useState<string | null>(null);
   const [polls, setPolls] = useState<Record<string, { jobId: string; elapsed: number }>>({});
   const pollsRef = useRef(polls);
@@ -378,6 +380,36 @@ export function VideoStudioModule() {
       showStudioError(t, err);
     } finally {
       setSavingPrompt(null);
+    }
+  };
+
+  // § per-scene voiceover: narration is the TTS / subtitle source text.
+  // Server honestly detaches a stale voice clip when the text actually changed.
+  const saveSceneNarration = async (sceneId: string) => {
+    if (!project) return;
+    const narration = narrDrafts[sceneId];
+    if (narration === undefined) return;
+    setSavingNarr(sceneId);
+    try {
+      const before = project.scenes?.find((s) => s.id === sceneId);
+      const voiceDetached = Boolean(before?.voiceAssetId) && narration.trim() !== (before?.narration ?? "").trim();
+      const updated = await api<Project>("/api/video-projects", {
+        method: "PATCH",
+        body: JSON.stringify({ projectId: project.id, sceneId, narration }),
+      });
+      if (updated?.scenes) setProject((prev) => (prev ? { ...prev, scenes: updated.scenes } : prev));
+      setNarrDrafts((prev) => {
+        const next = { ...prev };
+        delete next[sceneId];
+        return next;
+      });
+      toast.success(t("studio.vid.narrSaved"), {
+        description: voiceDetached ? t("studio.vid.narrVoiceStale") : undefined,
+      });
+    } catch (err) {
+      showStudioError(t, err);
+    } finally {
+      setSavingNarr(null);
     }
   };
 
@@ -1051,9 +1083,33 @@ export function VideoStudioModule() {
                           />
                         </div>
 
-                        {scene.narration && (
-                          <p className="text-[11px] text-muted-foreground"><span className="font-medium">{t("studio.vid.narration")}:</span> {scene.narration}</p>
-                        )}
+                        {/* § narration — editable TTS/subtitle source text */}
+                        <div className="grid gap-1.5">
+                          <Label htmlFor={`scnarr-${scene.id}`} className="text-[11px] text-muted-foreground">
+                            {t("studio.vid.narration")}
+                          </Label>
+                          <Textarea
+                            id={`scnarr-${scene.id}`}
+                            value={narrDrafts[scene.id] ?? scene.narration ?? ""}
+                            onChange={(e) => setNarrDrafts((prev) => ({ ...prev, [scene.id]: e.target.value }))}
+                            rows={2}
+                            maxLength={1000}
+                            placeholder={t("studio.vid.narrationPlaceholder")}
+                            className="resize-none text-[12px]"
+                          />
+                          {(narrDrafts[scene.id] ?? scene.narration ?? "") !== (scene.narration ?? "") && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="min-h-9 gap-1.5 text-xs"
+                              disabled={savingNarr === scene.id}
+                              onClick={() => saveSceneNarration(scene.id)}
+                            >
+                              {savingNarr === scene.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5 text-[var(--neon-2)]" />}
+                              {t("studio.vid.saveNarration")}
+                            </Button>
+                          )}
+                        </div>
 
                         {/* per-scene voice clip (§ per-scene voiceover) */}
                         {voiceMode === "perScene" && (

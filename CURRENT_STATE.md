@@ -1,6 +1,6 @@
 # CURRENT_STATE.md — ՀայDev Marketing (аудит по MASTER PROMPT §0)
 
-Дата: 2026-09-30 (после Round 11 / Task 19). Источник требований: `upload/Pasted Content_1790802969188.txt` (Master Prompt Pack) + `upload/HayDev_Marketing_Master_Prompt_Pack.txt`.
+Дата: обновлено после Round 13/14 (Task 27). Источник требований: `upload/Pasted Content_1790802969188.txt` (Master Prompt Pack) + `upload/HayDev_Marketing_Master_Prompt_Pack.txt`.
 
 ## Что уже работает (проверено в браузере/API)
 
@@ -19,9 +19,9 @@
 | §15 Prompt Compiler chatbot | ✅ | `prompts/compile`, `trends/prompt-compiler.ts` |
 | §17 Image Studio | ✅ | `generate/image`, routing по провайдерам |
 | §18 Video Studio + durable jobs + resume | ✅ | `VideoProject/VideoScene`, `jobs/[id]` step API |
-| §18+ Final Assembly (ffmpeg mixdown) | ✅ | `lib/video/assemble.ts`: сцены → concat → soundtrack (§20 edit-intents) + TTS-voiceover с НАСТОЯЩИМ sidechain duck |
+| §18+ Final Assembly (ffmpeg mixdown) | ✅ | `lib/video/assemble.ts`: сцены → concat → soundtrack (§20 edit-intents) + TTS-voiceover (single/perScene) с НАСТОЯЩИМ sidechain duck + subtitle burn-in |
 | §22 Voice / TTS | ✅ | `generate/tts` (z-ai), voice profiles + видео-voiceover (`generate_voiceover`) |
-| §23 Subtitles | ⚠️ частично | модель `SubtitleTrack` есть; UI-генерация — в video-пайплайне, отдельного менеджера нет |
+| §23 Subtitles | ✅ работает (Round 13) | `api/video-projects/subtitles` (ген/редактор/SRT+VTT/буrn-in в ffmpeg) + панель в video-studio |
 | §16 Publishing + Calendar | ✅ | `ScheduledPost`, `publishing.tsx` (calendar) |
 | §Analytics | ✅ | `analytics.tsx`, `CostLedger` спарклайны |
 | §19 MCP Server | ✅ | `api/mcp` + tokens |
@@ -33,9 +33,9 @@
 1. ~~§31 Subscriptions (FREE/CREATOR/PRO/BUSINESS) + SubscriptionModelPolicy + кредитные квоты~~ — ✅ РЕАЛИЗОВАНО (Task 20): модель `Subscription`, `src/lib/subscription.ts` (PLANS + assertQuota/assertBrandQuota), `/api/subscription` GET/switch, UI-вкладка «Տարիֆ» в Settings, квоты встроены в image/video/tts/brands, i18n ×3. Billing-процессора нет — переключение честное sandbox-switch.
 2. §24 Talking Avatar Studio — ✅ Round 13: честный BLOCKED-адаптер + plugin-слот (`src/lib/avatar/adapter.ts`, `api/generate/avatar`), UI-модуль; активация = HEYGEN_API_KEY + implement generate().
 3. §20-21 Music — ✅ Round 12 (upload + синтез + редактирование).
-4. §30 Внутренний админ-конфиг — ✅ Round 13: `User.isAdmin`, `SystemConfig`, `api/admin`, AdminTab (stats/switches/blacklist/promote), 423-гварды в image/tts/music/video.
+4. §30 Внутренний админ-конфиг — ✅ Round 13: `User.isAdmin`, `SystemConfig`, `api/admin`, AdminTab (stats/switches/blacklist/promote), 423-гварды в image/tts/music/video. Round 14: отдельный VIEW «Ադմին» (ViewId admin, G X, nav скрыт для не-админов, честная 403-панель) + тот же AdminTab.
 5. Email-доставка (SMTP) для reset — dev_inline честный режим (БЕЗ изменений).
-6. Пер-сценная озвучка видео — ✅ Round 13: VideoScene.voiceAssetId + voiceDurationSec (ffprobe), миксдаун по реальным оффсетам + sidechain duck, «Озвучить все» на клиенте.
+6. Пер-сценная озвучка видео — ✅ Round 13: VideoScene.voiceAssetId + voiceDurationSec (ffprobe), миксдаун по реальным оффсетам + sidechain duck, «Озвучить все» на клиенте. Round 14: narration редактируемый после создания (PATCH sceneId+narration, честный детач устаревшего голоса).
 
 ## Что опасно менять
 

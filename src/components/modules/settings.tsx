@@ -989,7 +989,7 @@ interface AdminData {
   systemConfig: { switchDefaults: Record<string, boolean>; modelBlacklist: string[]; disabledProviders: string[] };
 }
 
-function AdminTab() {
+export function AdminTab() {
   const { t } = useI18n();
   const selfEmail = useApp((s) => s.user)?.email?.toLowerCase() ?? "";
   const [data, setData] = useState<AdminData | null>(null);

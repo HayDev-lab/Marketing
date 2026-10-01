@@ -68,9 +68,19 @@ export async function PATCH(req: NextRequest) {
     if (body.sceneId) {
       const scene = await db.videoScene.findUnique({ where: { id: String(body.sceneId) } });
       if (!scene || scene.projectId !== project.id) throw new ApiError(404, "SCENE_NOT_FOUND", "Scene not found");
-      if (body.prompt !== undefined || body.reset) {
+      if (body.prompt !== undefined || body.narration !== undefined || body.reset) {
         const data: Record<string, unknown> = {};
         if (body.prompt !== undefined) data.prompt = String(body.prompt).slice(0, 2000);
+        if (body.narration !== undefined) {
+          // § per-scene voiceover: narration is the TTS/subtitle source text
+          const trimmed = String(body.narration ?? "").trim().slice(0, 1000);
+          data.narration = trimmed || null;
+          // honest staleness: a previously generated voice clip no longer matches the edited text
+          if (scene.voiceAssetId && trimmed !== (scene.narration ?? "").trim()) {
+            data.voiceAssetId = null;
+            data.voiceDurationSec = null;
+          }
+        }
         if (body.reset) {
           Object.assign(data, {
             status: "PENDING",
@@ -90,7 +100,11 @@ export async function PATCH(req: NextRequest) {
           action: "video.scene_update",
           objectType: "VideoScene",
           objectId: scene.id,
-          summary: body.reset ? "Scene reset for regeneration (voice detached)" : "Scene prompt edited",
+          summary: body.reset
+            ? "Scene reset for regeneration (voice detached)"
+            : body.narration !== undefined
+              ? `Scene narration edited${data.voiceAssetId === null ? " (stale voice detached)" : ""}`
+              : "Scene prompt edited",
         });
       }
       // Scene voice detach ({ projectId, sceneId, voice: { remove: true } })

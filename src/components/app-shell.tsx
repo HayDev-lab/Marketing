@@ -18,6 +18,7 @@ import { MusicModule } from "@/components/modules/music-studio";
 import { PublishingModule } from "@/components/modules/publishing";
 import { AnalyticsModule } from "@/components/modules/analytics";
 import { SettingsModule } from "@/components/modules/settings";
+import { AdminModule } from "@/components/modules/admin";
 import { McpModule } from "@/components/modules/mcp";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -25,7 +26,7 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   LayoutDashboard, Building2, Flame, CalendarRange, FileStack, Library,
-  ImageIcon, Clapperboard, AudioLines, ScanFace, Music4, Send, BarChart3, Settings, Plug, LogOut, Menu, X, Search,
+  ImageIcon, Clapperboard, AudioLines, ScanFace, Music4, Send, BarChart3, Settings, Plug, LogOut, Menu, X, Search, ShieldCheck,
 } from "lucide-react";
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
 import { CommandPalette, openCommandPalette } from "@/components/command-palette";
@@ -49,6 +50,7 @@ const NAV: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key:
   { id: "publishing", icon: Send, key: "nav.publishing" },
   { id: "analytics", icon: BarChart3, key: "nav.analytics" },
   { id: "settings", icon: Settings, key: "nav.settings" },
+  { id: "admin", icon: ShieldCheck, key: "nav.admin" }, // §30 — rendered only for platform admins
   { id: "mcp", icon: Plug, key: "nav.mcp" },
 ];
 
@@ -91,6 +93,7 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
       case "publishing": return <PublishingModule />;
       case "analytics": return <AnalyticsModule />;
       case "settings": return <SettingsModule />;
+      case "admin": return <AdminModule />;
       case "mcp": return <McpModule />;
       default: return <DashboardModule />;
     }
@@ -186,7 +189,7 @@ export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
         >
           <ScrollArea className="h-[calc(100vh-8rem)] lg:h-[calc(100vh-7rem)]">
             <nav className="grid gap-1 p-3" aria-label="Main" data-tour="nav">
-              {NAV.map(({ id, icon: Icon, key }) => (
+              {NAV.filter((item) => item.id !== "admin" || user?.isAdmin === true).map(({ id, icon: Icon, key }) => (
                 <button
                   key={id}
                   onClick={() => {
