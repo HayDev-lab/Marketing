@@ -9,13 +9,15 @@ import { settings } from "./dicts/settings";
 import { mcp } from "./dicts/mcp";
 import { autopilot } from "./dicts/autopilot";
 import { music } from "./dicts/music";
+import { avatar } from "./dicts/avatar";
+import { admin } from "./dicts/admin";
 
 export type Locale = "hy" | "ru" | "en";
 export const LOCALES: Locale[] = ["hy", "ru", "en"];
 export const LOCALE_LABELS: Record<Locale, string> = { hy: "Հայերեն", ru: "Русский", en: "English" };
 export type Dict = Record<string, string>;
 
-const MODULES: Record<Locale, Dict>[] = [core, brands, trends, planner, studio, analytics, publishing, settings, mcp, autopilot, music];
+const MODULES: Record<Locale, Dict>[] = [core, brands, trends, planner, studio, analytics, publishing, settings, mcp, autopilot, music, avatar, admin];
 
 export const DICTIONARIES: Record<Locale, Dict> = {
   hy: Object.assign({}, ...MODULES.map((m) => m.hy)),

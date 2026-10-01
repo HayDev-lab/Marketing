@@ -1,0 +1,1193 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from "react";
+     4→import { motion } from "framer-motion";
+     5→import { toast } from "sonner";
+     6→import {
+     7→  Clapperboard, Loader2, Plus, ArrowLeft, Film, Play, RotateCcw, Save,
+     8→  Wand2, BookOpen, Palette, User, CheckCircle2, XCircle, X, CircleDashed, Clock,
+     9→  FileVideo, Download, Music4, Info, Layers, Mic, Trash2,
+    10→} from "lucide-react";
+    11→import { useApp, pulseCore } from "@/lib/store";
+    12→import { useI18n, api, assetUrl } from "@/lib/use-i18n";
+    13→import { showStudioError } from "@/components/modules/image-studio";
+    14→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    15→import { Button } from "@/components/ui/button";
+    16→import { Textarea } from "@/components/ui/textarea";
+    17→import { Input } from "@/components/ui/input";
+    18→import { Label } from "@/components/ui/label";
+    19→import { Badge } from "@/components/ui/badge";
+    20→import { Skeleton } from "@/components/ui/skeleton";
+    21→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    22→import { Switch } from "@/components/ui/switch";
+    23→
+    24→const LAST_PROJECT_KEY = "haydev-video-last";
+    25→const BRIEF_FROM_LIB_KEY = "haydev-prompt-to-video";
+    26→
+    27→interface Scene {
+    28→  id: string; order: number; durationSec: number; prompt: string; narration?: string | null;
+    29→  status: string; assetId?: string | null; jobId?: string | null; error?: string | null; cost?: number | null; version: number;
+    30→}
+    31→interface Project {
+    32→  id: string; title: string; durationSec: number; aspectRatio: string; language: string;
+    33→  script?: string | null; characterBibleJson?: string | null; styleBibleJson?: string | null;
+    34→  status: string; createdAt: string; updatedAt: string; scenes?: Scene[]; _count?: { scenes: number };
+    35→  finalAssetId?: string | null; metaJson?: string | null;
+    36→}
+    37→interface JobInfo { id: string; status: string; error?: string | null }
+    38→interface MusicEdit {
+    39→  volume: number; trimStartSec: number; trimEndSec: number | null;
+    40→  fadeInSec: number; fadeOutSec: number; loop: boolean; duckEnabled: boolean; duckDb: number | null;
+    41→}
+    42→interface MusicItem {
+    43→  id: string; title: string; source: string | null; durationSec: number | null;
+    44→  meta: { edit?: Partial<MusicEdit> };
+    45→  asset: { id: string; url: string; mimeType: string; size: number } | null;
+    46→}
+    47→interface VoiceoverMeta {
+    48→  assetId?: string; enabled?: boolean; duckMusic?: boolean;
+    49→  text?: string; textSource?: string; voice?: string; speed?: number; generatedAt?: string;
+    50→}
+    51→
+    52→const VOICEOVER_LIMIT = 2000;
+    53→
+    54→function parseProjectMeta(raw: string | null | undefined): { soundtrack?: { musicAssetId: string; loopOverride: boolean }; voiceover?: VoiceoverMeta | null; assembly?: Record<string, unknown> } {
+    55→  try { return raw ? (JSON.parse(raw) as Record<string, never>) : {}; } catch { return {}; }
+    56→}
+    57→
+    58→/** Default narration text: scene narrations (in order) → full script → empty. */
+    59→function defaultVoiceText(p: Project | null): string {
+    60→  if (!p) return "";
+    61→  const narrations = (p.scenes ?? []).map((s) => (s.narration ?? "").trim()).filter(Boolean);
+    62→  if (narrations.length) return narrations.join("\n\n");
+    63→  return p.script?.trim() ?? "";
+    64→}
+    65→
+    66→type BibleRows = { key: string; value: string }[];
+    67→
+    68→function parseBible(raw: string | null | undefined): BibleRows {
+    69→  if (!raw) return [];
+    70→  try {
+    71→    const obj = JSON.parse(raw) as Record<string, unknown>;
+    72→    return Object.entries(obj).map(([key, value]) => ({ key, value: String(value ?? "") }));
+    73→  } catch {
+    74→    return [];
+    75→  }
+    76→}
+    77→
+    78→function bibleToObj(rows: BibleRows): Record<string, string> {
+    79→  const obj: Record<string, string> = {};
+    80→  for (const r of rows) if (r.key.trim()) obj[r.key.trim()] = r.value;
+    81→  return obj;
+    82→}
+    83→
+    84→const DURATIONS = [15, 30, 60];
+    85→const ASPECTS: { id: string; w: number; h: number }[] = [
+    86→  { id: "9:16", w: 20, h: 36 },
+    87→  { id: "1:1", w: 28, h: 28 },
+    88→  { id: "16:9", w: 48, h: 27 },
+    89→];
+    90→
+    91→export function VideoStudioModule() {
+    92→  const { t, localeLabels } = useI18n();
+    93→  const activeBrandId = useApp((s) => s.activeBrandId);
+    94→
+    95→  const [projects, setProjects] = useState<Project[]>([]);
+    96→  const [loadingList, setLoadingList] = useState(true);
+    97→  const [view, setView] = useState<"list" | "editor">("list");
+    98→  const [project, setProject] = useState<Project | null>(null);
+    99→  const projectRef = useRef<Project | null>(null);
+   100→  projectRef.current = project;
+   101→
+   102→  // create form
+   103→  const [title, setTitle] = useState("");
+   104→  const [durationSec, setDurationSec] = useState(30);
+   105→  const [aspect, setAspect] = useState("9:16");
+   106→  const [language, setLanguage] = useState("hy");
+   107→  const [brief, setBrief] = useState("");
+   108→  const [creating, setCreating] = useState(false);
+   109→
+   110→  // editor state
+   111→  const [scriptBrief, setScriptBrief] = useState("");
+   112→  const [scripting, setScripting] = useState(false);
+   113→  const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
+   114→  const [savingPrompt, setSavingPrompt] = useState<string | null>(null);
+   115→  const [sceneBusy, setSceneBusy] = useState<string | null>(null);
+   116→  const [polls, setPolls] = useState<Record<string, { jobId: string; elapsed: number }>>({});
+   117→  const pollsRef = useRef(polls);
+   118→  pollsRef.current = polls;
+   119→  const [charRows, setCharRows] = useState<BibleRows>([]);
+   120→  const [styleRows, setStyleRows] = useState<BibleRows>([]);
+   121→  const [savingBible, setSavingBible] = useState<"char" | "style" | null>(null);
+   122→
+   123→  // final assembly state
+   124→  const [musicList, setMusicList] = useState<MusicItem[]>([]);
+   125→  const [soundtrackId, setSoundtrackId] = useState<string>("");
+   126→  const [loopOverride, setLoopOverride] = useState(false);
+   127→  const [savingTrack, setSavingTrack] = useState(false);
+   128→  const [assembleJob, setAssembleJob] = useState<{ jobId: string; elapsed: number } | null>(null);
+   129→  const assembleJobRef = useRef(assembleJob);
+   130→  assembleJobRef.current = assembleJob;
+   131→
+   132→  // voiceover state
+   133→  const [voiceText, setVoiceText] = useState("");
+   134→  const [voiceSpeed, setVoiceSpeed] = useState("1");
+   135→  const [voiceBusy, setVoiceBusy] = useState(false);
+   136→  const [voiceAssetId, setVoiceAssetId] = useState<string | null>(null);
+   137→  const [voiceInfo, setVoiceInfo] = useState<{ textSource?: string; generatedAt?: string; chars?: number } | null>(null);
+   138→  const [voiceEnabled, setVoiceEnabled] = useState(true);
+   139→  const [voiceDuck, setVoiceDuck] = useState(true);
+   140→  const [voiceDur, setVoiceDur] = useState<number | null>(null);
+   141→  const [savingVoice, setSavingVoice] = useState(false);
+   142→
+   143→  const loadList = useCallback(async () => {
+   144→    try {
+   145→      const list = await api<Project[]>("/api/video-projects");
+   146→      setProjects(list);
+   147→    } catch {
+   148→      /* list stays empty */
+   149→    } finally {
+   150→      setLoadingList(false);
+   151→    }
+   152→  }, []);
+   153→
+   154→  const refreshProject = useCallback(async () => {
+   155→    const id = projectRef.current?.id;
+   156→    if (!id) return;
+   157→    try {
+   158→      const fresh = await api<Project>(`/api/video-projects?id=${id}`);
+   159→      setProject(fresh);
+   160→      loadList();
+   161→    } catch {
+   162→      /* keep current */
+   163→    }
+   164→  }, [loadList]);
+   165→
+   166→  const startPoll = useCallback((sceneId: string, jobId: string) => {
+   167→    setPolls((prev) => (prev[sceneId] ? prev : { ...prev, [sceneId]: { jobId, elapsed: 0 } }));
+   168→  }, []);
+   169→
+   170→  const loadMusic = useCallback(async () => {
+   171→    try {
+   172→      const lib = await api<{ items: MusicItem[] }>("/api/music");
+   173→      setMusicList(lib.items ?? []);
+   174→    } catch {
+   175→      /* music list is optional for assembly — honest empty select */
+   176→    }
+   177→  }, []);
+   178→
+   179→  const openProject = useCallback(async (id: string) => {
+   180→    try {
+   181→      const p = await api<Project>(`/api/video-projects?id=${id}`);
+   182→      setProject(p);
+   183→      setScriptBrief("");
+   184→      setPromptDrafts({});
+   185→      setCharRows(parseBible(p.characterBibleJson));
+   186→      setStyleRows(parseBible(p.styleBibleJson));
+   187→      const meta = parseProjectMeta(p.metaJson);
+   188→      setSoundtrackId(meta.soundtrack?.musicAssetId ?? "");
+   189→      setLoopOverride(Boolean(meta.soundtrack?.loopOverride));
+   190→      const vo = meta.voiceover ?? null;
+   191→      setVoiceAssetId(vo?.assetId ?? null);
+   192→      setVoiceInfo(vo ? { textSource: vo.textSource, generatedAt: vo.generatedAt } : null);
+   193→      setVoiceText(vo?.text ?? defaultVoiceText(p));
+   194→      setVoiceEnabled(vo ? vo.enabled !== false : true);
+   195→      setVoiceDuck(vo ? vo.duckMusic !== false : true);
+   196→      setVoiceDur(null);
+   197→      setView("editor");
+   198→      void loadMusic();
+   199→      try {
+   200→        window.localStorage.setItem(LAST_PROJECT_KEY, id);
+   201→      } catch { /* non-critical */ }
+   202→      for (const sc of p.scenes ?? []) {
+   203→        if (sc.jobId && ["GENERATING", "QUEUED"].includes(sc.status)) startPoll(sc.id, sc.jobId);
+   204→      }
+   205→    } catch (err) {
+   206→      showStudioError(t, err);
+   207→    }
+   208→  }, [startPoll, loadMusic]);
+   209→
+   210→  // hydrate: list + last opened project + library hand-off
+   211→  useEffect(() => {
+   212→    (async () => {
+   213→      await loadList();
+   214→      try {
+   215→        const fromLib = window.localStorage.getItem(BRIEF_FROM_LIB_KEY);
+   216→        if (fromLib) {
+   217→          setBrief(fromLib);
+   218→          window.localStorage.removeItem(BRIEF_FROM_LIB_KEY);
+   219→          toast.info(t("studio.vid.briefLoaded"));
+   220→        }
+   221→        const last = window.localStorage.getItem(LAST_PROJECT_KEY);
+   222→        if (last) {
+   223→          const exists = await api<Project[]>(`/api/video-projects`).catch(() => []);
+   224→          if (exists.some((p) => p.id === last)) await openProject(last);
+   225→        }
+   226→      } catch { /* non-critical */ }
+   227→    })();
+   228→  }, []);
+   229→
+   230→  // job polling: reconcile every 6s while scenes are in flight
+   231→  useEffect(() => {
+   232→    const iv = setInterval(async () => {
+   233→      const entries = Object.entries(pollsRef.current);
+   234→      for (const [sceneId, p] of entries) {
+   235→        try {
+   236→          const job = await api<JobInfo>(`/api/jobs/${p.jobId}`);
+   237→          if (job.status === "COMPLETED") {
+   238→            setPolls((prev) => { const n = { ...prev }; delete n[sceneId]; return n; });
+   239→            await refreshProject();
+   240→            pulseCore("SUCCESS");
+   241→            toast.success(t("studio.vid.status.COMPLETED"));
+   242→          } else if (["FAILED", "CANCELLED"].includes(job.status)) {
+   243→            setPolls((prev) => { const n = { ...prev }; delete n[sceneId]; return n; });
+   244→            await refreshProject();
+   245→            pulseCore("ERROR");
+   246→            toast.error(t("studio.err.generic", { msg: job.error ?? "video generation failed" }));
+   247→          }
+   248→        } catch { /* transient network/provider error — keep polling */ }
+   249→      }
+   250→    }, 6000);
+   251→    return () => clearInterval(iv);
+   252→  }, [refreshProject, t]);
+   253→
+   254→  // elapsed counter for polling display
+   255→  useEffect(() => {
+   256→    const iv = setInterval(() => {
+   257→      setPolls((prev) => {
+   258→        const next: Record<string, { jobId: string; elapsed: number }> = {};
+   259→        for (const [k, v] of Object.entries(prev)) next[k] = { ...v, elapsed: v.elapsed + 1 };
+   260→        return next;
+   261→      });
+   262→    }, 1000);
+   263→    return () => clearInterval(iv);
+   264→  }, []);
+   265→
+   266→  const backToList = () => {
+   267→    setView("list");
+   268→    setProject(null);
+   269→    loadList();
+   270→  };
+   271→
+   272→  const createProject = async () => {
+   273→    if (!title.trim()) {
+   274→      toast.warning(t("studio.vid.projectTitle"));
+   275→      return;
+   276→    }
+   277→    setCreating(true);
+   278→    pulseCore("PLANNING");
+   279→    try {
+   280→      const p = await api<Project>("/api/generate/video", {
+   281→        method: "POST",
+   282→        body: JSON.stringify({
+   283→          action: "create_project",
+   284→          brandId: activeBrandId ?? undefined,
+   285→          title,
+   286→          durationSec,
+   287→          aspectRatio: aspect,
+   288→          language,
+   289→          script: brief.trim() || undefined,
+   290→          autoShotPlan: true,
+   291→        }),
+   292→      });
+   293→      setTitle("");
+   294→      setBrief("");
+   295→      toast.success(t("studio.vid.created"));
+   296→      await loadList();
+   297→      await openProject(p.id);
+   298→    } catch (err) {
+   299→      pulseCore("ERROR");
+   300→      showStudioError(t, err);
+   301→    } finally {
+   302→      setCreating(false);
+   303→    }
+   304→  };
+   305→
+   306→  const generateScript = async () => {
+   307→    if (!project) return;
+   308→    setScripting(true);
+   309→    pulseCore("ANALYZING");
+   310→    try {
+   311→      const updated = await api<Project>("/api/generate/video", {
+   312→        method: "POST",
+   313→        body: JSON.stringify({ action: "generate_script", projectId: project.id, brief: scriptBrief || undefined }),
+   314→      });
+   315→      setProject((prev) => (prev ? { ...prev, ...updated, scenes: prev.scenes } : prev));
+   316→      setCharRows(parseBible(updated.characterBibleJson));
+   317→      setStyleRows(parseBible(updated.styleBibleJson));
+   318→      pulseCore("SUCCESS");
+   319→      toast.success(t("common.success"));
+   320→      loadList();
+   321→    } catch (err) {
+   322→      pulseCore("ERROR");
+   323→      showStudioError(t, err);
+   324→    } finally {
+   325→      setScripting(false);
+   326→    }
+   327→  };
+   328→
+   329→  const saveScenePrompt = async (sceneId: string) => {
+   330→    if (!project) return;
+   331→    const prompt = promptDrafts[sceneId];
+   332→    if (prompt === undefined) return;
+   333→    setSavingPrompt(sceneId);
+   334→    try {
+   335→      await api<Project>("/api/video-projects", {
+   336→        method: "PATCH",
+   337→        body: JSON.stringify({ projectId: project.id, sceneId, prompt }),
+   338→      });
+   339→      setProject((prev) =>
+   340→        prev ? { ...prev, scenes: prev.scenes?.map((s) => (s.id === sceneId ? { ...s, prompt } : s)) } : prev
+   341→      );
+   342→      toast.success(t("studio.vid.promptSaved"));
+   343→    } catch (err) {
+   344→      showStudioError(t, err);
+   345→    } finally {
+   346→      setSavingPrompt(null);
+   347→    }
+   348→  };
+   349→
+   350→  const generateScene = async (scene: Scene) => {
+   351→    if (!project) return;
+   352→    setSceneBusy(scene.id);
+   353→    try {
+   354→      if (scene.status === "COMPLETED" && scene.assetId) {
+   355→        // replace: reset scene first (version+1), then submit a fresh job
+   356→        await api<Project>("/api/video-projects", {
+   357→          method: "PATCH",
+   358→          body: JSON.stringify({ projectId: project.id, sceneId: scene.id, reset: true }),
+   359→        });
+   360→      }
+   361→      pulseCore("GENERATING");
+   362→      const res = await api<{ jobId: string; assetId?: string; deduplicated?: boolean }>("/api/generate/video", {
+   363→        method: "POST",
+   364→        body: JSON.stringify({ action: "generate_scene", sceneId: scene.id }),
+   365→      });
+   366→      if (res.deduplicated && res.assetId) {
+   367→        await refreshProject();
+   368→        pulseCore("SUCCESS");
+   369→        toast.success(t("studio.vid.status.COMPLETED"));
+   370→      } else if (res.jobId) {
+   371→        startPoll(scene.id, res.jobId);
+   372→        await refreshProject();
+   373→      }
+   374→    } catch (err) {
+   375→      pulseCore("ERROR");
+   376→      showStudioError(t, err);
+   377→    } finally {
+   378→      setSceneBusy(null);
+   379→    }
+   380→  };
+   381→
+   382→  const jobAction = async (scene: Scene, action: "resume" | "cancel") => {
+   383→    if (!scene.jobId) return;
+   384→    setSceneBusy(scene.id);
+   385→    try {
+   386→      if (action === "resume") {
+   387→        pulseCore("GENERATING");
+   388→        await api<JobInfo>(`/api/jobs/${scene.jobId}`, { method: "POST", body: JSON.stringify({ action: "resume" }) });
+   389→        startPoll(scene.id, scene.jobId);
+   390→        await refreshProject();
+   391→      } else {
+   392→        await api<JobInfo>(`/api/jobs/${scene.jobId}`, { method: "POST", body: JSON.stringify({ action: "cancel" }) });
+   393→        await refreshProject();
+   394→        toast.info(t("common.cancel"));
+   395→      }
+   396→    } catch (err) {
+   397→      showStudioError(t, err);
+   398→    } finally {
+   399→      setSceneBusy(null);
+   400→    }
+   401→  };
+   402→
+   403→  const saveBible = async (kind: "char" | "style") => {
+   404→    if (!project) return;
+   405→    setSavingBible(kind);
+   406→    try {
+   407→      const body = kind === "char"
+   408→        ? { projectId: project.id, characterBible: bibleToObj(charRows) }
+   409→        : { projectId: project.id, styleBible: bibleToObj(styleRows) };
+   410→      await api<Project>("/api/video-projects", { method: "PATCH", body: JSON.stringify(body) });
+   411→      toast.success(t("studio.vid.bibleSaved"));
+   412→    } catch (err) {
+   413→      showStudioError(t, err);
+   414→    } finally {
+   415→      setSavingBible(null);
+   416→    }
+   417→  };
+   418→
+   419→  const scenes = project?.scenes ?? [];
+   420→  const readyScenes = scenes.filter((s) => s.status === "COMPLETED" && s.assetId);
+   421→  const estVideoDur = scenes.reduce((sum, s) => sum + s.durationSec, 0);
+   422→  const selectedMusic = musicList.find((m) => m.id === soundtrackId) ?? null;
+   423→  const selectedEdit = selectedMusic?.meta?.edit ?? null;
+   424→  const estTotal = scenes.reduce((sum, s) => sum + (s.cost ?? (s.status === "COMPLETED" ? 0 : 0.1)), 0);
+   425→
+   426→  const saveSoundtrack = async (musicId: string, loop: boolean) => {
+   427→    if (!project) return;
+   428→    setSavingTrack(true);
+   429→    try {
+   430→      await api<Project>("/api/video-projects", {
+   431→        method: "PATCH",
+   432→        body: JSON.stringify({ projectId: project.id, soundtrack: musicId ? { musicAssetId: musicId, loopOverride: loop } : null }),
+   433→      });
+   434→      toast.success(t("studio.vid.assembly.trackSaved"));
+   435→    } catch (err) {
+   436→      showStudioError(t, err);
+   437→    } finally {
+   438→      setSavingTrack(false);
+   439→    }
+   440→  };
+   441→
+   442→  const changeSoundtrack = (musicId: string) => {
+   443→    const id = musicId === "none" ? "" : musicId;
+   444→    setSoundtrackId(id);
+   445→    const item = musicList.find((m) => m.id === id);
+   446→    setLoopOverride(Boolean(item?.meta?.edit?.loop));
+   447→    void saveSoundtrack(id, Boolean(item?.meta?.edit?.loop));
+   448→  };
+   449→
+   450→  const toggleLoop = (checked: boolean) => {
+   451→    setLoopOverride(checked);
+   452→    void saveSoundtrack(soundtrackId, checked);
+   453→  };
+   454→
+   455→  const generateVoiceover = async () => {
+   456→    if (!project) return;
+   457→    const text = voiceText.trim();
+   458→    if (text.length > VOICEOVER_LIMIT) {
+   459→      toast.warning(t("studio.vid.voice.tooLong", { n: text.length, max: VOICEOVER_LIMIT }));
+   460→      return;
+   461→    }
+   462→    setVoiceBusy(true);
+   463→    pulseCore("GENERATING");
+   464→    try {
+   465→      const res = await api<{ assetId: string; chars: number; textSource: string }>("/api/generate/video", {
+   466→        method: "POST",
+   467→        body: JSON.stringify({
+   468→          action: "generate_voiceover",
+   469→          projectId: project.id,
+   470→          text: text || undefined, // empty → server builds from scene narrations / script
+   471→          speed: Number(voiceSpeed) || 1,
+   472→        }),
+   473→      });
+   474→      setVoiceAssetId(res.assetId);
+   475→      setVoiceInfo({ textSource: res.textSource, chars: res.chars, generatedAt: new Date().toISOString() });
+   476→      setVoiceEnabled(true);
+   477→      setVoiceDur(null);
+   478→      pulseCore("SUCCESS");
+   479→      toast.success(t("studio.vid.voice.generated"));
+   480→      await refreshProject();
+   481→    } catch (err) {
+   482→      pulseCore("ERROR");
+   483→      showStudioError(t, err);
+   484→    } finally {
+   485→      setVoiceBusy(false);
+   486→    }
+   487→  };
+   488→
+   489→  const saveVoiceConfig = async (patch: { enabled?: boolean; duckMusic?: boolean; remove?: boolean }) => {
+   490→    if (!project) return;
+   491→    setSavingVoice(true);
+   492→    try {
+   493→      await api<Project>("/api/video-projects", {
+   494→        method: "PATCH",
+   495→        body: JSON.stringify({ projectId: project.id, voiceover: patch }),
+   496→      });
+   497→      await refreshProject();
+   498→    } catch (err) {
+   499→      showStudioError(t, err);
+   500→    } finally {
+   501→      setSavingVoice(false);
+   502→    }
+   503→  };
+   504→
+   505→  const toggleVoiceEnabled = (checked: boolean) => {
+   506→    setVoiceEnabled(checked);
+   507→    void saveVoiceConfig({ enabled: checked });
+   508→  };
+   509→
+   510→  const toggleVoiceDuck = (checked: boolean) => {
+   511→    setVoiceDuck(checked);
+   512→    void saveVoiceConfig({ duckMusic: checked });
+   513→  };
+   514→
+   515→  const detachVoiceover = async () => {
+   516→    setVoiceAssetId(null);
+   517→    setVoiceInfo(null);
+   518→    setVoiceDur(null);
+   519→    await saveVoiceConfig({ remove: true });
+   520→    toast.info(t("studio.vid.voice.detached"));
+   521→  };
+   522→
+   523→  const startAssembly = async () => {
+   524→    if (!project) return;
+   525→    pulseCore("GENERATING");
+   526→    try {
+   527→      const res = await api<{ jobId: string }>("/api/generate/video", {
+   528→        method: "POST",
+   529→        body: JSON.stringify({ action: "assemble_project", projectId: project.id }),
+   530→      });
+   531→      setAssembleJob({ jobId: res.jobId, elapsed: 0 });
+   532→    } catch (err) {
+   533→      pulseCore("ERROR");
+   534→      showStudioError(t, err);
+   535→    }
+   536→  };
+   537→
+   538→  // assembly job polling: 3s — ffmpeg runs server-side in the durable ASSEMBLE job.
+   539→  // Depends on the boolean, NOT the object: the elapsed counter rewrites the object
+   540→  // every second, and an object identity dependency would reset this 3s interval
+   541→  // before it ever fires (discovered in browser QA — polls never ran).
+   542→  const assembleActive = Boolean(assembleJob);
+   543→  useEffect(() => {
+   544→    if (!assembleActive) return;
+   545→    const iv = setInterval(async () => {
+   546→      const cur = assembleJobRef.current;
+   547→      if (!cur) return;
+   548→      try {
+   549→        const job = await api<JobInfo>(`/api/jobs/${cur.jobId}`);
+   550→        if (job.status === "COMPLETED") {
+   551→          setAssembleJob(null);
+   552→          await refreshProject();
+   553→          pulseCore("SUCCESS");
+   554→          toast.success(t("studio.vid.assembly.done"));
+   555→        } else if (["FAILED", "CANCELLED", "NEEDS_USER_ACTION"].includes(job.status)) {
+   556→          setAssembleJob(null);
+   557→          pulseCore("ERROR");
+   558→          toast.error(t("studio.err.generic", { msg: job.error ?? "assembly failed" }));
+   559→        }
+   560→      } catch {
+   561→        /* transient — keep polling */
+   562→      }
+   563→    }, 3000);
+   564→    return () => clearInterval(iv);
+   565→  }, [assembleActive, refreshProject, t]);
+   566→
+   567→  // assembly elapsed counter
+   568→  useEffect(() => {
+   569→    if (!assembleActive) return;
+   570→    const iv = setInterval(() => setAssembleJob((prev) => (prev ? { ...prev, elapsed: prev.elapsed + 1 } : prev)), 1000);
+   571→    return () => clearInterval(iv);
+   572→  }, [assembleActive]);
+   573→
+   574→  const statusBadge = (status: string) => {
+   575→    const map: Record<string, string> = {
+   576→      COMPLETED: "border-[var(--neon-2)]/50 text-[var(--neon-2)]",
+   577→      GENERATING: "border-[var(--neon)]/50 text-[var(--neon)]",
+   578→      FAILED: "border-destructive/50 text-destructive",
+   579→    };
+   580→    return (
+   581→      <Badge variant="outline" className={`shrink-0 text-[10px] ${map[status] ?? "text-muted-foreground"}`}>
+   582→        {t(`studio.vid.status.${status}` as const)}
+   583→      </Badge>
+   584→    );
+   585→  };
+   586→
+   587→  return (
+   588→    // grid-cols-1 (minmax(0,1fr)) — без неё implicit track растягивается под
+   589→    // max-content горизонтального стрипа сцен и ломает mobile-layout
+   590→    <div className="grid grid-cols-1 gap-5">
+   591→      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
+   592→        <div className="flex flex-wrap items-center justify-between gap-3">
+   593→          <div>
+   594→            <h1 className="text-xl font-semibold sm:text-2xl neon-text">{t("studio.vid.title")}</h1>
+   595→            <p className="mt-1 text-sm text-muted-foreground">{t("studio.vid.subtitle")}</p>
+   596→          </div>
+   597→          {view === "editor" && (
+   598→            <Button variant="outline" className="min-h-11 gap-2" onClick={backToList}>
+   599→              <ArrowLeft className="h-4 w-4" /> {t("studio.vid.back")}
+   600→            </Button>
+   601→          )}
+   602→        </div>
+   603→      </motion.section>
+   604→
+   605→      {view === "list" ? (
+   606→        <>
+   607→          {/* create form */}
+   608→          <Card className="glass-strong neon-border rounded-2xl">
+   609→            <CardHeader className="pb-3">
+   610→              <CardTitle className="flex items-center gap-2 text-base">
+   611→                <Plus className="h-4 w-4 text-[var(--neon)]" /> {t("studio.vid.newProject")}
+   612→              </CardTitle>
+   613→            </CardHeader>
+   614→            <CardContent className="grid gap-5">
+   615→              <div className="grid gap-2 sm:grid-cols-2">
+   616→                <div className="grid gap-2">
+   617→                  <Label htmlFor="vid-title">{t("studio.vid.projectTitle")}</Label>
+   618→                  <Input id="vid-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("studio.vid.titlePh")} />
+   619→                </div>
+   620→                <div className="grid gap-2">
+   621→                  <Label htmlFor="vid-lang">{t("studio.vid.language")}</Label>
+   622→                  <Select value={language} onValueChange={setLanguage}>
+   623→                    <SelectTrigger id="vid-lang" className="min-h-11 w-full"><SelectValue /></SelectTrigger>
+   624→                    <SelectContent>
+   625→                      {Object.entries(localeLabels).map(([id, label]) => (
+   626→                        <SelectItem key={id} value={id}>{label}</SelectItem>
+   627→                      ))}
+   628→                    </SelectContent>
+   629→                  </Select>
+   630→                </div>
+   631→              </div>
+   632→
+   633→              <div className="grid gap-2">
+   634→                <Label>{t("studio.vid.duration")}</Label>
+   635→                <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={t("studio.vid.duration")}>
+   636→                  {DURATIONS.map((d) => (
+   637→                    <button
+   638→                      key={d}
+   639→                      role="radio"
+   640→                      aria-checked={durationSec === d}
+   641→                      onClick={() => setDurationSec(d)}
+   642→                      className={`glass glass-hover min-h-14 rounded-xl text-center transition ${durationSec === d ? "neon-border neon-text" : "border border-border/60"}`}
+   643→                    >
+   644→                      <span className="text-lg font-bold">{d}s</span>
+   645→                    </button>
+   646→                  ))}
+   647→                </div>
+   648→              </div>
+   649→
+   650→              <div className="grid gap-2">
+   651→                <Label>{t("studio.vid.aspect")}</Label>
+   652→                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={t("studio.vid.aspect")}>
+   653→                  {ASPECTS.map((a) => (
+   654→                    <button
+   655→                      key={a.id}
+   656→                      role="radio"
+   657→                      aria-checked={aspect === a.id}
+   658→                      onClick={() => setAspect(a.id)}
+   659→                      className={`glass glass-hover flex min-h-11 min-w-11 flex-col items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs transition ${aspect === a.id ? "neon-border neon-text" : "border border-border/60"}`}
+   660→                    >
+   661→                      <span
+   662→                        className={`rounded-[4px] border-2 ${aspect === a.id ? "border-[var(--neon)] bg-[var(--neon)]/15" : "border-muted-foreground/50"}`}
+   663→                        style={{ width: a.w, height: a.h }}
+   664→                        aria-hidden
+   665→                      />
+   666→                      <span className="font-mono">{a.id}</span>
+   667→                    </button>
+   668→                  ))}
+   669→                </div>
+   670→              </div>
+   671→
+   672→              <div className="grid gap-2">
+   673→                <Label htmlFor="vid-brief">{t("studio.vid.brief")}</Label>
+   674→                <Textarea id="vid-brief" value={brief} onChange={(e) => setBrief(e.target.value)} placeholder={t("studio.vid.briefPh")} rows={3} className="resize-none" />
+   675→                <p className="text-[11px] text-muted-foreground">
+   676→                  {t("studio.vid.brand")}: {activeBrandId ? <span className="neon-text font-medium">{activeBrandId.slice(0, 14)}…</span> : t("studio.vid.brandNone")}
+   677→                </p>
+   678→              </div>
+   679→
+   680→              <Button onClick={createProject} disabled={creating} size="lg" className="min-h-11 gap-2 font-semibold">
+   681→                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+   682→                {creating ? t("studio.vid.creating") : t("studio.vid.create")}
+   683→              </Button>
+   684→            </CardContent>
+   685→          </Card>
+   686→
+   687→          {/* project list */}
+   688→          <Card className="glass rounded-2xl">
+   689→            <CardHeader className="pb-3">
+   690→              <CardTitle className="flex items-center gap-2 text-base">
+   691→                <Film className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.vid.projects")}
+   692→              </CardTitle>
+   693→            </CardHeader>
+   694→            <CardContent>
+   695→              {loadingList ? (
+   696→                <div className="grid gap-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 rounded-xl bg-muted/40" />)}</div>
+   697→              ) : projects.length === 0 ? (
+   698→                <p className="py-6 text-center text-sm text-muted-foreground">{t("studio.vid.projectsEmpty")}</p>
+   699→              ) : (
+   700→                <ul className="grid max-h-96 gap-2 overflow-y-auto scrollbar-thin">
+   701→                  {projects.map((p) => (
+   702→                    <li key={p.id} className="glass glass-hover flex flex-wrap items-center justify-between gap-3 rounded-xl p-3">
+   703→                      <div className="min-w-0 flex-1">
+   704→                        <p className="truncate text-sm font-medium">{p.title}</p>
+   705→                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+   706→                          {p.durationSec}s · {p.aspectRatio} · {p.language.toUpperCase()} ·{" "}
+   707→                          {t("studio.vid.sceneCount", { n: p._count?.scenes ?? 0 })}
+   708→                        </p>
+   709→                      </div>
+   710→                      <div className="flex items-center gap-2">
+   711→                        {statusBadge(p.status)}
+   712→                        <Button variant="outline" size="sm" className="min-h-11 gap-1.5 text-xs" onClick={() => openProject(p.id)}>
+   713→                          <Play className="h-3.5 w-3.5 text-[var(--neon)]" /> {t("studio.vid.open")}
+   714→                        </Button>
+   715→                      </div>
+   716→                    </li>
+   717→                  ))}
+   718→                </ul>
+   719→              )}
+   720→            </CardContent>
+   721→          </Card>
+   722→        </>
+   723→      ) : project ? (
+   724→        <>
+   725→          {/* script panel */}
+   726→          <Card className="glass-strong neon-border rounded-2xl">
+   727→            <CardHeader className="pb-3">
+   728→              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+   729→                <BookOpen className="h-4 w-4 text-[var(--neon)]" /> {project.title}
+   730→                <Badge variant="outline" className="text-[10px]">{project.durationSec}s · {project.aspectRatio} · {project.language.toUpperCase()}</Badge>
+   731→              </CardTitle>
+   732→            </CardHeader>
+   733→            <CardContent className="grid gap-3">
+   734→              {project.script ? (
+   735→                <p className="whitespace-pre-wrap rounded-xl border border-border/60 bg-muted/20 p-4 text-sm leading-relaxed">{project.script}</p>
+   736→              ) : (
+   737→                <p className="py-2 text-sm text-muted-foreground">{t("studio.vid.scriptEmpty")}</p>
+   738→              )}
+   739→              <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+   740→                <div className="grid gap-2">
+   741→                  <Label htmlFor="vid-script-brief">{t("studio.vid.briefForScript")}</Label>
+   742→                  <Input id="vid-script-brief" value={scriptBrief} onChange={(e) => setScriptBrief(e.target.value)} placeholder={t("studio.vid.briefForScriptPh")} />
+   743→                </div>
+   744→                <Button variant="outline" className="min-h-11 gap-2" onClick={generateScript} disabled={scripting}>
+   745→                  {scripting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4 text-[var(--neon-3)]" />}
+   746→                  {scripting ? t("studio.vid.scripting") : project.script ? t("studio.vid.regenScript") : t("studio.vid.genScript")}
+   747→                </Button>
+   748→              </div>
+   749→            </CardContent>
+   750→          </Card>
+   751→
+   752→          {/* timeline summary bar */}
+   753→          <div className="glass rounded-2xl p-4">
+   754→            <div className="flex flex-wrap items-center justify-between gap-3">
+   755→              <div className="flex items-center gap-2">
+   756→                <Clock className="h-4 w-4 text-[var(--neon-2)]" />
+   757→                <span className="text-sm font-medium">{t("studio.vid.timeline")}</span>
+   758→                <div className="flex items-center gap-1" aria-label={t("studio.vid.timeline")}>
+   759→                  {scenes.map((s) => (
+   760→                    <span
+   761→                      key={s.id}
+   762→                      title={`${t("studio.vid.scene", { n: s.order + 1 })} — ${t(`studio.vid.status.${s.status}` as const)}`}
+   763→                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 bg-muted/20"
+   764→                    >
+   765→                      {s.status === "COMPLETED" && <CheckCircle2 className="h-4 w-4 text-[var(--neon-2)]" />}
+   766→                      {s.status === "GENERATING" && <Loader2 className="h-4 w-4 animate-spin text-[var(--neon)]" />}
+   767→                      {s.status === "FAILED" && <XCircle className="h-4 w-4 text-destructive" />}
+   768→                      {["PENDING", "QUEUED"].includes(s.status) && <CircleDashed className="h-4 w-4 text-muted-foreground/60" />}
+   769→                    </span>
+   770→                  ))}
+   771→                </div>
+   772→              </div>
+   773→              <Badge variant="outline" className="text-xs">
+   774→                {t("studio.vid.estCost")}: <span className="neon-text ml-1 font-mono">${estTotal.toFixed(2)}</span>
+   775→              </Badge>
+   776→            </div>
+   777→          </div>
+   778→
+   779→          {/* scenes strip */}
+   780→          <Card className="glass rounded-2xl">
+   781→            <CardHeader className="pb-3">
+   782→              <CardTitle className="flex items-center gap-2 text-base">
+   783→                <Clapperboard className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.vid.scenes")}
+   784→                {scenes.length > 0 && <Badge variant="secondary" className="text-[10px]">{scenes.length}</Badge>}
+   785→              </CardTitle>
+   786→            </CardHeader>
+   787→            <CardContent>
+   788→              {scenes.length === 0 ? (
+   789→                <p className="py-6 text-center text-sm text-muted-foreground">{t("studio.vid.scenesEmpty")}</p>
+   790→              ) : (
+   791→                <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin" role="list">
+   792→                  {scenes.map((scene) => {
+   793→                    const poll = polls[scene.id];
+   794→                    const draft = promptDrafts[scene.id] ?? scene.prompt;
+   795→                    return (
+   796→                      <motion.div
+   797→                        key={scene.id}
+   798→                        initial={{ opacity: 0, x: 12 }}
+   799→                        animate={{ opacity: 1, x: 0 }}
+   800→                        transition={{ delay: scene.order * 0.05 }}
+   801→                        role="listitem"
+   802→                        className="glass grid w-[300px] shrink-0 gap-2 rounded-xl p-4 sm:w-[340px]"
+   803→                      >
+   804→                        <div className="flex items-center justify-between gap-2">
+   805→                          <span className="text-sm font-semibold neon-text">{t("studio.vid.scene", { n: scene.order + 1 })}</span>
+   806→                          <div className="flex items-center gap-1.5">
+   807→                            <Badge variant="outline" className="text-[10px]">{scene.durationSec}s</Badge>
+   808→                            {statusBadge(scene.status)}
+   809→                          </div>
+   810→                        </div>
+   811→
+   812→                        {scene.status === "COMPLETED" && scene.assetId ? (
+   813→                          <video controls src={assetUrl(`/api/assets/${scene.assetId}/raw`)} className="w-full rounded-lg border border-border/60" aria-label={t("studio.vid.scene", { n: scene.order + 1 })} />
+   814→                        ) : (
+   815→                          <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-border/60 bg-muted/20">
+   816→                            {poll ? (
+   817→                              <span className="flex items-center gap-2 text-xs text-muted-foreground">
+   818→                                <Loader2 className="h-4 w-4 animate-spin text-[var(--neon)]" />
+   819→                                {t("studio.vid.polling", { sec: poll.elapsed })}
+   820→                              </span>
+   821→                            ) : (
+   822→                              <Film className="h-6 w-6 text-muted-foreground/40" />
+   823→                            )}
+   824→                          </div>
+   825→                        )}
+   826→
+   827→                        <div className="grid gap-1.5">
+   828→                          <Label htmlFor={`sc-${scene.id}`} className="text-[11px] text-muted-foreground">{t("studio.vid.scenePrompt")}</Label>
+   829→                          <Textarea
+   830→                            id={`sc-${scene.id}`}
+   831→                            value={draft}
+   832→                            onChange={(e) => setPromptDrafts((prev) => ({ ...prev, [scene.id]: e.target.value }))}
+   833→                            rows={3}
+   834→                            className="resize-none font-mono text-[12px]"
+   835→                          />
+   836→                        </div>
+   837→
+   838→                        {scene.narration && (
+   839→                          <p className="text-[11px] text-muted-foreground"><span className="font-medium">{t("studio.vid.narration")}:</span> {scene.narration}</p>
+   840→                        )}
+   841→                        {scene.error && <p className="line-clamp-2 text-[11px] text-destructive">{scene.error}</p>}
+   842→
+   843→                        <div className="flex flex-wrap gap-2">
+   844→                          {draft !== scene.prompt && (
+   845→                            <Button variant="outline" size="sm" className="min-h-11 gap-1.5 text-xs" disabled={savingPrompt === scene.id} onClick={() => saveScenePrompt(scene.id)}>
+   846→                              {savingPrompt === scene.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5 text-[var(--neon-2)]" />}
+   847→                              {t("studio.vid.savePrompt")}
+   848→                            </Button>
+   849→                          )}
+   850→                          {scene.status === "FAILED" && scene.jobId && (
+   851→                            <>
+   852→                              <Button variant="outline" size="sm" className="min-h-11 gap-1.5 text-xs" disabled={sceneBusy === scene.id} onClick={() => jobAction(scene, "resume")}>
+   853→                                <RotateCcw className="h-3.5 w-3.5 text-[var(--neon-3)]" /> {t("common.resume")}
+   854→                              </Button>
+   855→                              <Button variant="ghost" size="sm" className="min-h-11 gap-1.5 text-xs" disabled={sceneBusy === scene.id} onClick={() => jobAction(scene, "cancel")}>
+   856→                                <X className="h-3.5 w-3.5" /> {t("common.cancel")}
+   857→                              </Button>
+   858→                            </>
+   859→                          )}
+   860→                          {!(scene.status === "GENERATING") && (
+   861→                            <Button
+   862→                              size="sm"
+   863→                              className="min-h-11 flex-1 gap-1.5 text-xs"
+   864→                              disabled={sceneBusy === scene.id || Boolean(poll)}
+   865→                              onClick={() => generateScene(scene)}
+   866→                              aria-label={scene.status === "COMPLETED" ? t("studio.vid.regenScene") : t("studio.vid.generateScene")}
+   867→                            >
+   868→                              {sceneBusy === scene.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+   869→                              {scene.status === "COMPLETED" ? t("studio.vid.regenScene") : t("studio.vid.generateScene")}
+   870→                            </Button>
+   871→                          )}
+   872→                        </div>
+   873→                      </motion.div>
+   874→                    );
+   875→                  })}
+   876→                </div>
+   877→              )}
+   878→            </CardContent>
+   879→          </Card>
+   880→
+   881→          {/* final assembly */}
+   882→          <Card className="glass-strong neon-border rounded-2xl">
+   883→            <CardHeader className="pb-3">
+   884→              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+   885→                <FileVideo className="h-4 w-4 text-[var(--neon)]" /> {t("studio.vid.assembly.title")}
+   886→                <Badge variant="outline" className={`text-[10px] ${readyScenes.length > 0 ? "border-[var(--neon-2)]/50 text-[var(--neon-2)]" : "text-muted-foreground"}`}>
+   887→                  {t("studio.vid.assembly.ready", { ready: readyScenes.length, total: scenes.length })}
+   888→                </Badge>
+   889→              </CardTitle>
+   890→            </CardHeader>
+   891→            <CardContent className="grid gap-4">
+   892→              {/* soundtrack picker */}
+   893→              <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end sm:gap-3">
+   894→                <div className="grid gap-2">
+   895→                  <Label htmlFor="vid-track" className="flex items-center gap-1.5">
+   896→                    <Music4 className="h-3.5 w-3.5 text-[var(--neon-3)]" /> {t("studio.vid.assembly.soundtrack")}
+   897→                  </Label>
+   898→                  <Select value={soundtrackId} onValueChange={changeSoundtrack}>
+   899→                    <SelectTrigger id="vid-track" className="min-h-11 w-full">
+   900→                      <SelectValue placeholder={t("studio.vid.assembly.soundtrackNone")} />
+   901→                    </SelectTrigger>
+   902→                    <SelectContent>
+   903→                      <SelectItem value="none">{t("studio.vid.assembly.soundtrackNone")}</SelectItem>
+   904→                      {musicList.map((m) => (
+   905→                        <SelectItem key={m.id} value={m.id} disabled={!m.asset}>
+   906→                          {m.title}
+   907→                          {m.durationSec ? ` · ${Math.round(m.durationSec)}s` : ""}
+   908→                          {!m.asset ? ` · ${t("studio.vid.assembly.lyricsOnly")}` : ""}
+   909→                        </SelectItem>
+   910→                      ))}
+   911→                    </SelectContent>
+   912→                  </Select>
+   913→                </div>
+   914→                {selectedMusic && (
+   915→                  <div className="flex items-center gap-2 pb-1">
+   916→                    <Switch id="vid-loop" checked={loopOverride} onCheckedChange={toggleLoop} disabled={savingTrack} />
+   917→                    <Label htmlFor="vid-loop" className="text-xs text-muted-foreground">{t("studio.vid.assembly.loop")}</Label>
+   918→                  </div>
+   919→                )}
+   920→              </div>
+   921→
+   922→              {/* applied edit-intents (§20) — honest: these are applied by ffmpeg at assembly time */}
+   923→              {selectedEdit && selectedMusic?.asset && (
+   924→                <div className="grid gap-1.5">
+   925→                  <div className="flex flex-wrap gap-1.5">
+   926→                    {selectedEdit.volume !== undefined && selectedEdit.volume !== 1 && (
+   927→                      <Badge variant="outline" className="text-[10px]">vol ×{selectedEdit.volume}</Badge>
+   928→                    )}
+   929→                    {Boolean(selectedEdit.trimStartSec || selectedEdit.trimEndSec) && (
+   930→                      <Badge variant="outline" className="text-[10px]">trim {selectedEdit.trimStartSec ?? 0}–{selectedEdit.trimEndSec ?? "∞"}s</Badge>
+   931→                    )}
+   932→                    {Boolean(selectedEdit.fadeInSec) && <Badge variant="outline" className="text-[10px]">fade-in {selectedEdit.fadeInSec}s</Badge>}
+   933→                    {Boolean(selectedEdit.fadeOutSec) && <Badge variant="outline" className="text-[10px]">fade-out {selectedEdit.fadeOutSec}s</Badge>}
+   934→                    {loopOverride && <Badge variant="outline" className="text-[10px]">loop</Badge>}
+   935→                    {selectedEdit.duckEnabled && <Badge variant="outline" className="text-[10px] text-muted-foreground">duck ⏸</Badge>}
+   936→                  </div>
+   937→                  <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+   938→                    <Info className="mt-0.5 h-3 w-3 shrink-0 text-[var(--neon-2)]" />
+   939→                    {t("studio.vid.assembly.chipsNote")}
+   940→                  </p>
+   941→                  {selectedEdit.duckEnabled && (
+   942→                    <p className="text-[11px] text-muted-foreground">{t("studio.vid.assembly.duckNote")}</p>
+   943→                  )}
+   944→                  {!loopOverride && selectedMusic.durationSec != null && selectedMusic.durationSec < estVideoDur && (
+   945→                    <p className="text-[11px] text-amber-500">{t("studio.vid.assembly.shortHint", { music: Math.round(selectedMusic.durationSec), video: Math.round(estVideoDur) })}</p>
+   946→                  )}
+   947→                </div>
+   948→              )}
+   949→              {!soundtrackId && (
+   950→                <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+   951→                  <Info className="mt-0.5 h-3 w-3 shrink-0" /> {t("studio.vid.assembly.silentNote")}
+   952→                </p>
+   953→              )}
+   954→
+   955→              {/* voiceover (TTS narration) — mixed into the final MP4 with real sidechain ducking */}
+   956→              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/10 p-3">
+   957→                <div className="flex flex-wrap items-center justify-between gap-2">
+   958→                  <Label className="flex items-center gap-1.5 text-sm font-medium">
+   959→                    <Mic className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.vid.voice.title")}
+   960→                  </Label>
+   961→                  <div className="flex items-center gap-2">
+   962→                    {voiceAssetId && (
+   963→                      <>
+   964→                        <Badge variant="outline" className={`text-[10px] ${voiceEnabled ? "border-[var(--neon-2)]/50 text-[var(--neon-2)]" : "text-muted-foreground"}`}>
+   965→                          {voiceEnabled ? t("studio.vid.voice.included") : t("studio.vid.voice.excluded")}
+   966→                        </Badge>
+   967→                        <Button
+   968→                          variant="ghost"
+   969→                          size="icon"
+   970→                          className="h-8 w-8"
+   971→                          disabled={savingVoice}
+   972→                          aria-label={t("studio.vid.voice.detach")}
+   973→                          title={t("studio.vid.voice.detach")}
+   974→                          onClick={detachVoiceover}
+   975→                        >
+   976→                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+   977→                        </Button>
+   978→                      </>
+   979→                    )}
+   980→                  </div>
+   981→                </div>
+   982→
+   983→                <div className="grid gap-2">
+   984→                  <div className="flex items-center justify-between gap-2">
+   985→                    <Label htmlFor="vid-vo-text" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.text")}</Label>
+   986→                    <span className={`text-[10px] ${voiceText.length > VOICEOVER_LIMIT ? "text-destructive" : "text-muted-foreground"}`}>
+   987→                      {voiceText.length}/{VOICEOVER_LIMIT}
+   988→                    </span>
+   989→                  </div>
+   990→                  <Textarea
+   991→                    id="vid-vo-text"
+   992→                    value={voiceText}
+   993→                    onChange={(e) => setVoiceText(e.target.value)}
+   994→                    rows={3}
+   995→                    className="resize-none text-[13px] leading-relaxed"
+   996→                    placeholder={t("studio.vid.voice.textPh")}
+   997→                  />
+   998→                  <div className="flex flex-wrap items-center justify-between gap-2">
+   999→                    <div className="flex items-center gap-2">
+  1000→                      <Label htmlFor="vid-vo-speed" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.speed")}</Label>
+  1001→                      <Select value={voiceSpeed} onValueChange={setVoiceSpeed}>
+  1002→                        <SelectTrigger id="vid-vo-speed" className="h-9 w-[92px] text-xs">
+  1003→                          <SelectValue />
+  1004→                        </SelectTrigger>
+  1005→                        <SelectContent>
+  1006→                          {["0.8", "0.9", "1", "1.1", "1.2"].map((s) => (
+  1007→                            <SelectItem key={s} value={s}>×{s}</SelectItem>
+  1008→                          ))}
+  1009→                        </SelectContent>
+  1010→                      </Select>
+  1011→                    </div>
+  1012→                    <Button
+  1013→                      variant="outline"
+  1014→                      size="sm"
+  1015→                      className="min-h-11 gap-1.5 text-xs"
+  1016→                      disabled={voiceBusy || !voiceText.trim() || voiceText.length > VOICEOVER_LIMIT}
+  1017→                      onClick={generateVoiceover}
+  1018→                    >
+  1019→                      {voiceBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mic className="h-3.5 w-3.5 text-[var(--neon-3)]" />}
+  1020→                      {voiceAssetId ? t("studio.vid.voice.regen") : t("studio.vid.voice.generate")}
+  1021→                    </Button>
+  1022→                  </div>
+  1023→                  {!voiceText.trim() && (
+  1024→                    <p className="text-[11px] text-muted-foreground">{t("studio.vid.voice.emptyHint")}</p>
+  1025→                  )}
+  1026→                  {voiceText.length > VOICEOVER_LIMIT && (
+  1027→                    <p className="text-[11px] text-destructive">{t("studio.vid.voice.tooLong", { n: voiceText.length, max: VOICEOVER_LIMIT })}</p>
+  1028→                  )}
+  1029→                </div>
+  1030→
+  1031→                {voiceAssetId && (
+  1032→                  <div className="grid gap-2">
+  1033→                    <audio
+  1034→                      controls
+  1035→                      preload="metadata"
+  1036→                      src={assetUrl(`/api/assets/${voiceAssetId}/raw`)}
+  1037→                      className="h-9 w-full"
+  1038→                      onLoadedMetadata={(e) => {
+  1039→                        const el = e.currentTarget;
+  1040→                        if (Number.isFinite(el.duration)) {
+  1041→                          setVoiceDur(el.duration);
+  1042→                          return;
+  1043→                        }
+  1044→                        // Streamed audio reports Infinity — force a metadata seek (standard workaround)
+  1045→                        el.currentTime = 1e101;
+  1046→                        const handler = () => {
+  1047→                          el.removeEventListener("timeupdate", handler);
+  1048→                          if (Number.isFinite(el.duration)) setVoiceDur(el.duration);
+  1049→                          el.currentTime = 0;
+  1050→                        };
+  1051→                        el.addEventListener("timeupdate", handler);
+  1052→                      }}
+  1053→                      aria-label={t("studio.vid.voice.title")}
+  1054→                    />
+  1055→                    <div className="flex flex-wrap items-center justify-between gap-2">
+  1056→                      <p className="text-[10px] text-muted-foreground">
+  1057→                        {voiceInfo?.chars ? `${voiceInfo.chars} ${t("studio.vid.voice.charsUnit")}` : ""}
+  1058→                        {voiceInfo?.textSource ? ` · ${t(`studio.vid.voice.source.${voiceInfo.textSource === "narrations" ? "narrations" : voiceInfo.textSource === "script" ? "script" : "user"}` as const)}` : ""}
+  1059→                        {voiceDur != null && Number.isFinite(voiceDur) ? ` · ${voiceDur.toFixed(1)}s` : ""}
+  1060→                      </p>
+  1061→                      <div className="flex flex-wrap items-center gap-3">
+  1062→                        <div className="flex items-center gap-1.5">
+  1063→                          <Switch id="vid-vo-include" checked={voiceEnabled} onCheckedChange={toggleVoiceEnabled} disabled={savingVoice} />
+  1064→                          <Label htmlFor="vid-vo-include" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.include")}</Label>
+  1065→                        </div>
+  1066→                        {soundtrackId && (
+  1067→                          <div className="flex items-center gap-1.5">
+  1068→                            <Switch id="vid-vo-duck" checked={voiceDuck} onCheckedChange={toggleVoiceDuck} disabled={savingVoice} />
+  1069→                            <Label htmlFor="vid-vo-duck" className="text-[11px] text-muted-foreground">{t("studio.vid.voice.duck")}</Label>
+  1070→                          </div>
+  1071→                        )}
+  1072→                      </div>
+  1073→                    </div>
+  1074→                    {voiceDuck && soundtrackId && (
+  1075→                      <p className="text-[11px] text-muted-foreground">{t("studio.vid.voice.duckNote")}</p>
+  1076→                    )}
+  1077→                    {voiceDur != null && estVideoDur > 0 && voiceDur > estVideoDur + 0.5 && (
+  1078→                      <p className="text-[11px] text-amber-500">{t("studio.vid.voice.longerThanVideo", { voice: voiceDur.toFixed(0), video: Math.round(estVideoDur) })}</p>
+  1079→                    )}
+  1080→                  </div>
+  1081→                )}
+  1082→              </div>
+  1083→
+  1084→              {/* readiness + action */}
+  1085→              <div className="grid gap-2">
+  1086→                {readyScenes.length === 0 ? (
+  1087→                  <p className="text-sm text-muted-foreground">{t("studio.vid.assembly.noScenes")}</p>
+  1088→                ) : readyScenes.length < scenes.length ? (
+  1089→                  <p className="text-sm text-amber-500">{t("studio.vid.assembly.skipNote", { ready: readyScenes.length, total: scenes.length, pending: scenes.length - readyScenes.length })}</p>
+  1090→                ) : null}
+  1091→                {assembleJob ? (
+  1092→                  <Button variant="outline" size="lg" className="min-h-11 gap-2" disabled>
+  1093→                    <Loader2 className="h-4 w-4 animate-spin text-[var(--neon)]" />
+  1094→                    {t("studio.vid.assembly.assembling", { sec: assembleJob.elapsed })}
+  1095→                  </Button>
+  1096→                ) : (
+  1097→                  <Button size="lg" className="min-h-11 gap-2 font-semibold" disabled={readyScenes.length === 0} onClick={startAssembly}>
+  1098→                    <Layers className="h-4 w-4" />
+  1099→                    {project?.finalAssetId ? t("studio.vid.assembly.reassemble") : t("studio.vid.assembly.assemble")}
+  1100→                  </Button>
+  1101→                )}
+  1102→              </div>
+  1103→
+  1104→              {/* final result */}
+  1105→              {project?.finalAssetId ? (
+  1106→                <div className="grid gap-2 rounded-xl border border-border/60 bg-muted/10 p-3">
+  1107→                  <p className="flex items-center gap-1.5 text-sm font-medium">
+  1108→                    <CheckCircle2 className="h-4 w-4 text-[var(--neon-2)]" /> {t("studio.vid.assembly.final")}
+  1109→                  </p>
+  1110→                  <video
+  1111→                    controls
+  1112→                    src={assetUrl(`/api/assets/${project.finalAssetId}/raw`)}
+  1113→                    className="mx-auto w-full max-w-xs rounded-lg border border-border/60"
+  1114→                    aria-label={t("studio.vid.assembly.final")}
+  1115→                  />
+  1116→                  <div className="flex items-center justify-between gap-2">
+  1117→                    <p className="text-[11px] text-muted-foreground">{project.aspectRatio} · 30fps · h264+aac</p>
+  1118→                    <a
+  1119→                      href={assetUrl(`/api/assets/${project.finalAssetId}/raw`)}
+  1120→                      download
+  1121→                      className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border/60 px-3 text-xs transition hover:bg-muted/40"
+  1122→                    >
+  1123→                      <Download className="h-3.5 w-3.5 text-[var(--neon)]" /> {t("studio.vid.assembly.download")}
+  1124→                    </a>
+  1125→                  </div>
+  1126→                </div>
+  1127→              ) : (
+  1128→                <p className="text-xs text-muted-foreground">{t("studio.vid.assembly.finalEmpty")}</p>
+  1129→              )}
+  1130→            </CardContent>
+  1131→          </Card>
+  1132→
+  1133→          {/* bibles */}
+  1134→          <div className="grid gap-5 lg:grid-cols-2">
+  1135→            {([
+  1136→              { kind: "char" as const, title: t("studio.vid.charBible"), icon: User, neon: "var(--neon)", rows: charRows, setRows: setCharRows },
+  1137→              { kind: "style" as const, title: t("studio.vid.styleBible"), icon: Palette, neon: "var(--neon-2)", rows: styleRows, setRows: setStyleRows },
+  1138→            ]).map(({ kind, title, icon: Icon, neon, rows, setRows }) => (
+  1139→              <Card key={kind} className="glass rounded-2xl">
+  1140→                <CardHeader className="pb-3">
+  1141→                  <CardTitle className="flex items-center gap-2 text-base">
+  1142→                    <Icon className="h-4 w-4" style={{ color: neon }} /> {title}
+  1143→                  </CardTitle>
+  1144→                </CardHeader>
+  1145→                <CardContent className="grid gap-3">
+  1146→                  {rows.length === 0 ? (
+  1147→                    <p className="text-xs text-muted-foreground">{t("studio.vid.bibleEmpty")}</p>
+  1148→                  ) : (
+  1149→                    <div className="grid max-h-64 gap-2 overflow-y-auto scrollbar-thin">
+  1150→                      {rows.map((row, i) => (
+  1151→                        <div key={i} className="flex items-center gap-2">
+  1152→                          <Input
+  1153→                            value={row.key}
+  1154→                            aria-label={`${t("studio.vid.key")} ${i + 1}`}
+  1155→                            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))}
+  1156→                            className="h-11 w-2/5 font-mono text-xs"
+  1157→                            placeholder={t("studio.vid.key")}
+  1158→                          />
+  1159→                          <Input
+  1160→                            value={row.value}
+  1161→                            aria-label={`${t("studio.vid.value")} ${i + 1}`}
+  1162→                            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
+  1163→                            className="h-11 flex-1 text-xs"
+  1164→                            placeholder={t("studio.vid.value")}
+  1165→                          />
+  1166→                          <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0" aria-label={t("common.delete")} onClick={() => setRows(rows.filter((_, j) => j !== i))}>
+  1167→                            <X className="h-4 w-4" />
+  1168→                          </Button>
+  1169→                        </div>
+  1170→                      ))}
+  1171→                    </div>
+  1172→                  )}
+  1173→                  <div className="flex gap-2">
+  1174→                    <Button variant="outline" size="sm" className="min-h-11 gap-1.5 text-xs" onClick={() => setRows([...rows, { key: "", value: "" }])}>
+  1175→                      <Plus className="h-3.5 w-3.5" /> {t("studio.vid.addKey")}
+  1176→                    </Button>
+  1177→                    <Button variant="outline" size="sm" className="min-h-11 gap-1.5 text-xs" disabled={savingBible === kind} onClick={() => saveBible(kind)}>
+  1178→                      {savingBible === kind ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" style={{ color: neon }} />}
+  1179→                      {t("common.save")}
+  1180→                    </Button>
+  1181→                  </div>
+  1182→                </CardContent>
+  1183→              </Card>
+  1184→            ))}
+  1185→          </div>
+  1186→        </>
+  1187→      ) : (
+  1188→        <Skeleton className="h-64 rounded-2xl bg-muted/40" />
+  1189→      )}
+  1190→    </div>
+  1191→  );
+  1192→}
+  1193→

@@ -1,12 +1,14 @@
 import { NextRequest } from "next/server";
+import path from "path";
 import { db } from "@/lib/db";
 import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
 import { audit, ledger } from "@/lib/ledger";
 import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
-import { videoSubmit, llmCompleteJson, snapVideoDuration, ttsGenerate, saveAssetBase64 } from "@/lib/ai/zai";
-import { kickAssembly } from "@/lib/video/assemble";
+import { videoSubmit, llmCompleteJson, snapVideoDuration, ttsGenerate, saveAssetBase64, UPLOADS_DIR } from "@/lib/ai/zai";
+import { kickAssembly, probeMedia } from "@/lib/video/assemble";
+import { assertRouteAllowed } from "@/lib/ai/system-config";
 
 export const VOICEOVER_TEXT_LIMIT = 2000;
 
@@ -36,6 +38,7 @@ export async function POST(req: NextRequest) {
         durationSec: Math.ceil(scene.durationSec),
       });
       if (!route) throw new ApiError(503, "NO_PROVIDER", "No video provider available");
+      await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
       const model = getProviderModel(route.providerId, route.modelId);
       const estimatedCost = model?.estimatedCostPerCall ?? 0.1;
       await assertQuota(user.id, "VIDEO_GENERATION", estimatedCost, { videoDurationSec: Math.ceil(scene.durationSec) });
@@ -224,6 +227,7 @@ export async function POST(req: NextRequest) {
       const speed = Math.min(1.5, Math.max(0.5, Number(body.speed) || 1));
       const route = routeCapability({ capability: "TTS" });
       if (!route) throw new ApiError(503, "NO_PROVIDER", "No TTS provider available");
+      await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
       const estimatedCost = 0.005;
       await assertQuota(user.id, "TTS", estimatedCost);
 
@@ -278,6 +282,85 @@ export async function POST(req: NextRequest) {
         return ok({ jobId: job.id, assetId: asset.id, url: `/api/assets/${asset.id}/raw`, chars: text.length, textSource });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Voiceover TTS failed";
+        await jobs.markFailed(job.id, message);
+        throw new ApiError(502, "GENERATION_FAILED", message, { jobId: job.id, canRetry: true });
+      }
+    }
+
+    // ---- Per-scene voiceover: REAL TTS for ONE scene narration ----
+    // Synchronous durable job (same pattern as the project-level voiceover). The audio is
+    // linked on the scene (voiceAssetId + measured voiceDurationSec via ffprobe) and the
+    // per-scene mixdown places each clip at its scene's REAL normalized offset.
+    if (action === "generate_scene_voiceover") {
+      const sceneId = String(body.sceneId ?? "");
+      const scene = await db.videoScene.findUnique({ where: { id: sceneId }, include: { project: true } });
+      if (!scene || scene.project.userId !== user.id) throw new ApiError(404, "SCENE_NOT_FOUND", "Scene not found");
+      // Text: explicit override → scene narration (scene prompt is NOT spoken — visual prompt, not narration)
+      const text = String(body.text ?? scene.narration ?? "").trim();
+      if (!text) {
+        throw new ApiError(409, "NO_NARRATION_TEXT", "Scene has no narration text — write a narration line for this scene first");
+      }
+      if (text.length > VOICEOVER_TEXT_LIMIT) {
+        throw new ApiError(400, "TEXT_TOO_LONG", `Scene narration too long: ${text.length} chars (max ${VOICEOVER_TEXT_LIMIT})`);
+      }
+      const voice = String(body.voice ?? "tongtong");
+      const speed = Math.min(1.5, Math.max(0.5, Number(body.speed) || 1));
+      const route = routeCapability({ capability: "TTS" });
+      if (!route) throw new ApiError(503, "NO_PROVIDER", "No TTS provider available");
+      await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
+      const estimatedCost = 0.005;
+      await assertQuota(user.id, "TTS", estimatedCost);
+
+      const { job } = await jobs.create({
+        userId: user.id,
+        kind: "TTS",
+        provider: route.providerId,
+        model: route.modelId,
+        input: { sceneId: scene.id, sceneVoiceover: true, text, voice, speed },
+        idempotencyKey: `scene_voiceover:${scene.id}:${text.length}:${voice}:${speed}:${Date.now()}`,
+        estimatedCost,
+      });
+      if (job.status === "COMPLETED" && job.resultAssetId) {
+        return ok({ jobId: job.id, assetId: job.resultAssetId, deduplicated: true });
+      }
+      await jobs.markProcessing(job.id);
+      try {
+        const result = await ttsGenerate({ text, voice, speed });
+        const asset = await saveAssetBase64(user.id, result.base64, "VOICE", result.mimeType, `scene_voice_${scene.order + 1}_${scene.id.slice(-6)}.mp3`, {
+          projectId: scene.projectId,
+          sceneId: scene.id,
+          voice,
+          speed,
+          chars: text.length,
+          provider: route.providerId,
+        });
+        // measure the REAL spoken length — the per-scene mixdown offsets and the §23
+        // subtitle timing both depend on it; unknown duration stays honest null
+        let voiceDurationSec: number | null = null;
+        try {
+          const media = await db.mediaAsset.findUnique({ where: { id: asset.id } });
+          if (media) {
+            const probe = await probeMedia(path.join(UPLOADS_DIR, media.storageKey));
+            voiceDurationSec = Number(probe.durationSec.toFixed(2));
+          }
+        } catch {
+          voiceDurationSec = null; // honest: unknown — estimated timing downstream
+        }
+        const updated = await db.videoScene.update({
+          where: { id: scene.id },
+          data: { voiceAssetId: asset.id, voiceDurationSec },
+        });
+        await jobs.markCompleted(job.id, { assetId: asset.id, url: `/api/assets/${asset.id}/raw`, voiceDurationSec }, asset.id, estimatedCost);
+        await audit.log({
+          userId: user.id,
+          action: "video.scene_voiceover_generate",
+          objectType: "VideoScene",
+          objectId: scene.id,
+          summary: `Scene ${scene.order + 1} voice: ${text.length} chars${voiceDurationSec ? `, ${voiceDurationSec}s` : ""} via ${route.providerId}`,
+        });
+        return ok({ jobId: job.id, assetId: asset.id, url: `/api/assets/${asset.id}/raw`, voiceDurationSec, chars: text.length, scene: updated });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Scene TTS failed";
         await jobs.markFailed(job.id, message);
         throw new ApiError(502, "GENERATION_FAILED", message, { jobId: job.id, canRetry: true });
       }

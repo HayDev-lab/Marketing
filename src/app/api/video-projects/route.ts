@@ -16,7 +16,26 @@ export async function GET(req: NextRequest) {
         include: { scenes: { orderBy: { order: "asc" } } },
       });
       if (!project || project.userId !== user.id) throw new ApiError(404, "NOT_FOUND", "Project not found");
-      return ok(project);
+      const tracks = await db.subtitleTrack.findMany({
+        where: { projectId: id, userId: user.id },
+        orderBy: { createdAt: "desc" },
+      });
+      return ok({
+        ...project,
+        subtitleTracks: tracks.map((tr) => {
+          const cues = (() => {
+            try { return tr.cuesJson ? (JSON.parse(tr.cuesJson) as unknown[]) : []; } catch { return []; }
+          })();
+          return {
+            id: tr.id,
+            language: tr.language,
+            format: tr.format,
+            cueCount: cues.length,
+            cues,
+            createdAt: tr.createdAt,
+          };
+        }),
+      });
     }
     const list = await db.videoProject.findMany({
       where: { userId: user.id },
@@ -31,8 +50,11 @@ export async function GET(req: NextRequest) {
 // PATCH /api/video-projects — ownership-checked edits:
 //   { projectId, sceneId, prompt }            → edit scene prompt
 //   { projectId, sceneId, reset: true }       → reset COMPLETED/FAILED scene for regeneration (version+1)
+//   { projectId, sceneId, voice: { remove: true } } → detach the scene's TTS voice clip
 //   { projectId, scenes: [{id, order}] }      → reorder scenes
 //   { projectId, soundtrack: {musicAssetId, loopOverride?} | null } → soundtrack for final assembly
+//   { projectId, voiceover: { mode?: "single"|"perScene", enabled?, duckMusic?, remove? } } → narration config
+//   { projectId, subtitles: { trackId, enabled?, burnIn? } | null } → §23 subtitle config for assembly
 //   { projectId, title?, script?, characterBible?, styleBible? } → project-level fields (bibles as plain objects)
 export async function PATCH(req: NextRequest) {
   return handle(async () => {
@@ -53,6 +75,8 @@ export async function PATCH(req: NextRequest) {
           Object.assign(data, {
             status: "PENDING",
             assetId: null,
+            voiceAssetId: null, // the regenerated clip may not match the old narration audio
+            voiceDurationSec: null,
             jobId: null,
             error: null,
             lastFrameAssetId: null,
@@ -66,7 +90,22 @@ export async function PATCH(req: NextRequest) {
           action: "video.scene_update",
           objectType: "VideoScene",
           objectId: scene.id,
-          summary: body.reset ? "Scene reset for regeneration" : "Scene prompt edited",
+          summary: body.reset ? "Scene reset for regeneration (voice detached)" : "Scene prompt edited",
+        });
+      }
+      // Scene voice detach ({ projectId, sceneId, voice: { remove: true } })
+      if (body.voice && typeof body.voice === "object" && (body.voice as { remove?: unknown }).remove === true) {
+        if (!scene.voiceAssetId) throw new ApiError(409, "NO_SCENE_VOICE", "This scene has no voice clip attached");
+        await db.videoScene.update({
+          where: { id: scene.id },
+          data: { voiceAssetId: null, voiceDurationSec: null },
+        });
+        await audit.log({
+          userId: user.id,
+          action: "video.scene_voiceover_detach",
+          objectType: "VideoScene",
+          objectId: scene.id,
+          summary: `Scene ${scene.order + 1} voice detached`,
         });
       }
     }
@@ -113,29 +152,65 @@ export async function PATCH(req: NextRequest) {
       });
     }
 
-    // Voiceover config toggles (audio itself is produced by /api/generate/video action=generate_voiceover)
-    //   { projectId, voiceover: { enabled?: bool, duckMusic?: bool } }
-    //   { projectId, voiceover: { remove: true } }  → detach voiceover entirely
+    // Voiceover config toggles (audio itself is produced by /api/generate/video)
+    //   { projectId, voiceover: { mode?: "single"|"perScene", enabled?: bool, duckMusic?: bool } }
+    //   { projectId, voiceover: { remove: true } }  → detach single voiceover entirely
+    // mode is a config switch: settable BEFORE any audio exists (per-scene clips live on scenes)
     if (body.voiceover !== undefined) {
       let meta: Record<string, unknown> = {};
       try { meta = project.metaJson ? (JSON.parse(project.metaJson) as Record<string, unknown>) : {}; } catch { /* rebuild meta */ }
-      const current = (meta.voiceover ?? null) as { assetId?: string; enabled?: boolean; duckMusic?: boolean } | null;
-      const vo = body.voiceover as { enabled?: unknown; duckMusic?: unknown; remove?: unknown };
+      const current = (meta.voiceover ?? null) as { assetId?: string; enabled?: boolean; duckMusic?: boolean; mode?: string } | null;
+      const vo = body.voiceover as { enabled?: unknown; duckMusic?: unknown; remove?: unknown; mode?: unknown };
       if (vo.remove === true) {
         if (current) delete meta.voiceover;
         await db.videoProject.update({ where: { id: project.id }, data: { metaJson: JSON.stringify(meta) } });
         await audit.log({ userId: user.id, action: "video.voiceover_config", objectType: "VideoProject", objectId: project.id, summary: "Voiceover detached" });
       } else {
-        if (!current?.assetId) throw new ApiError(409, "NO_VOICEOVER", "No voiceover generated for this project yet — generate the narration audio first");
-        const next = {
-          ...current,
-          enabled: vo.enabled !== undefined ? Boolean(vo.enabled) : Boolean(current.enabled ?? true),
-          duckMusic: vo.duckMusic !== undefined ? Boolean(vo.duckMusic) : Boolean(current.duckMusic ?? true),
-        };
-        meta.voiceover = next;
-        await db.videoProject.update({ where: { id: project.id }, data: { metaJson: JSON.stringify(meta) } });
-        await audit.log({ userId: user.id, action: "video.voiceover_config", objectType: "VideoProject", objectId: project.id, summary: `Voiceover: enabled=${next.enabled}, duckMusic=${next.duckMusic}` });
+        // mode can be set without audio; the other toggles require an existing single track
+        const modeValue = vo.mode === "perScene" || vo.mode === "single" ? String(vo.mode) : undefined;
+        if (!modeValue && !current?.assetId && !(vo.enabled === undefined && vo.duckMusic === undefined)) {
+          throw new ApiError(409, "NO_VOICEOVER", "No voiceover generated for this project yet — generate the narration audio first");
+        }
+        if (current?.assetId || modeValue) {
+          const next = {
+            ...current,
+            mode: modeValue ?? current?.mode ?? "single",
+            enabled: vo.enabled !== undefined ? Boolean(vo.enabled) : Boolean(current?.enabled ?? true),
+            duckMusic: vo.duckMusic !== undefined ? Boolean(vo.duckMusic) : Boolean(current?.duckMusic ?? true),
+          };
+          meta.voiceover = next;
+          await db.videoProject.update({ where: { id: project.id }, data: { metaJson: JSON.stringify(meta) } });
+          await audit.log({ userId: user.id, action: "video.voiceover_config", objectType: "VideoProject", objectId: project.id, summary: `Voiceover: mode=${next.mode}, enabled=${next.enabled}, duckMusic=${next.duckMusic}` });
+        }
       }
+    }
+
+    // §23 subtitle config for the final assembly
+    //   { projectId, subtitles: { trackId, enabled?, burnIn? } | null }
+    if (body.subtitles !== undefined) {
+      let meta: Record<string, unknown> = {};
+      try { meta = project.metaJson ? (JSON.parse(project.metaJson) as Record<string, unknown>) : {}; } catch { /* rebuild meta */ }
+      let track: { trackId: string; enabled: boolean; burnIn: boolean } | null = null;
+      if (body.subtitles && typeof body.subtitles === "object") {
+        const trackId = String((body.subtitles as { trackId?: unknown }).trackId ?? "");
+        const sub = trackId ? await db.subtitleTrack.findFirst({ where: { id: trackId, userId: user.id, projectId: project.id } }) : null;
+        if (!sub) throw new ApiError(404, "SUBTITLE_TRACK_NOT_FOUND", "Subtitle track not found for this project");
+        track = {
+          trackId: sub.id,
+          enabled: (body.subtitles as { enabled?: unknown }).enabled !== false,
+          burnIn: Boolean((body.subtitles as { burnIn?: unknown }).burnIn),
+        };
+      }
+      if (track) meta.subtitles = track;
+      else delete meta.subtitles;
+      await db.videoProject.update({ where: { id: project.id }, data: { metaJson: JSON.stringify(meta) } });
+      await audit.log({
+        userId: user.id,
+        action: "video.subtitles_config",
+        objectType: "VideoProject",
+        objectId: project.id,
+        summary: track ? `Subtitles: track=${track.trackId}, burnIn=${track.burnIn}` : "Subtitle config cleared",
+      });
     }
 
     // Project-level fields

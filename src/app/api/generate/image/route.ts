@@ -5,6 +5,7 @@ import { audit, ledger } from "@/lib/ledger";
 import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
+import { assertRouteAllowed } from "@/lib/ai/system-config";
 import { imageGenerate, saveAssetBase64, UPLOADS_DIR } from "@/lib/ai/zai";
 import { readFile } from "fs/promises";
 import path from "path";
@@ -30,6 +31,8 @@ export async function POST(req: NextRequest) {
     if (route.status === "BLOCKED_EXTERNAL") {
       throw new ApiError(503, "PROVIDER_BLOCKED", `Provider ${route.providerId} is blocked: no external API key configured`);
     }
+    // §30 platform guard: admin disabled providers / blacklisted models / user-disabled provider
+    await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
     const model = getProviderModel(route.providerId, route.modelId);
     const estimatedCost = model?.estimatedCostPerCall ?? 0.02;
     await assertQuota(user.id, "IMAGE_GENERATION", estimatedCost);

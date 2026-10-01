@@ -16,6 +16,7 @@ model User {
   name          String?
   locale        String    @default("hy") // hy | ru | en
   emailVerified Boolean   @default(false)
+  isAdmin       Boolean   @default(false) // §30 internal admin (platform owner)
   verifyToken   String?
   resetToken    String?
   resetExpires  DateTime?
@@ -408,6 +409,8 @@ model VideoScene {
   model            String?
   status           String   @default("PENDING") // PENDING|QUEUED|GENERATING|COMPLETED|FAILED
   assetId          String?
+  voiceAssetId     String?  // per-scene TTS narration audio (§ per-scene voiceover)
+  voiceDurationSec Float?   // real spoken duration (measured server-side after TTS)
   lastFrameAssetId String?
   jobId            String?
   cost             Float?
@@ -428,7 +431,16 @@ model SubtitleTrack {
   format      String   @default("SRT") // SRT | VTT
   content     String
   styleJson   String?
+  cuesJson    String?  // structured cues [{start,end,text,timing}] for the §23 editor
   createdAt   DateTime @default(now())
+}
+
+// §30 internal admin config — platform-level switches stored as typed keys
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  valueJson String
+  updatedAt DateTime @updatedAt
 }
 
 model VoiceProfile {

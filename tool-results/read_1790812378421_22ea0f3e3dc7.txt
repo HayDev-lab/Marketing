@@ -1,0 +1,743 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from "react";
+     4→import { motion } from "framer-motion";
+     5→import { toast } from "sonner";
+     6→import {
+     7→  Music, Music4, Loader2, Upload, Ban, Library, Wand2, Copy, Check, X,
+     8→  Download, Settings2, Trash2, Play, Square, FileAudio, RefreshCcw, Mic2,
+     9→} from "lucide-react";
+    10→import { useApp, pulseCore } from "@/lib/store";
+    11→import { useI18n, api, assetUrl } from "@/lib/use-i18n";
+    12→import { showStudioError } from "@/components/modules/image-studio";
+    13→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Textarea } from "@/components/ui/textarea";
+    16→import { Input } from "@/components/ui/input";
+    17→import { Label } from "@/components/ui/label";
+    18→import { Badge } from "@/components/ui/badge";
+    19→import { Skeleton } from "@/components/ui/skeleton";
+    20→import { Slider } from "@/components/ui/slider";
+    21→import { Switch } from "@/components/ui/switch";
+    22→import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+    23→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    24→
+    25→// ---------- types ----------
+    26→
+    27→interface MusicAsset {
+    28→  id: string;
+    29→  title: string;
+    30→  lyrics: string | null;
+    31→  stylePrompt: string | null;
+    32→  source: string | null; // GENERATED | UPLOADED | LYRICS
+    33→  provider: string | null;
+    34→  durationSec: number | null;
+    35→  cost: number | null;
+    36→  createdAt: string;
+    37→  meta: Record<string, unknown>;
+    38→  asset: { id: string; url: string; mimeType: string; size: number; filename: string } | null;
+    39→}
+    40→
+    41→interface EditState {
+    42→  volume: number;
+    43→  trimStartSec: number;
+    44→  trimEndSec: number | null;
+    45→  fadeInSec: number;
+    46→  fadeOutSec: number;
+    47→  loop: boolean;
+    48→  duckEnabled: boolean;
+    49→  duckDb: number | null;
+    50→}
+    51→
+    52→interface GenResult {
+    53→  jobId: string; musicId: string; assetId: string; url: string;
+    54→  durationSec: number; bars: number; preset: string; tempo: number; seed: number; provider: string;
+    55→}
+    56→
+    57→interface Caps { providerId: string | null; capabilities: { durationsSec: number[]; maxDurationSec: number; supportsLyrics: boolean }; presets: { id: string; bpm: number; drums: boolean }[]; lyricsCapableProviders: string[] }
+    58→
+    59→const PRESETS = ["lofi", "ambient", "corporate", "uplifting", "cinematic"] as const;
+    60→const DURATIONS = [10, 15, 20, 30, 45, 60];
+    61→const DEFAULT_EDIT: EditState = { volume: 1, trimStartSec: 0, trimEndSec: null, fadeInSec: 0, fadeOutSec: 0, loop: false, duckEnabled: false, duckDb: null };
+    62→
+    63→function fmtSize(bytes: number): string {
+    64→  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    65→}
+    66→
+    67→// ---------- Web Audio preview: apply edit params to a decoded buffer (real DSP) ----------
+    68→
+    69→function renderPreviewBuffer(ctx: AudioContext, src: AudioBuffer, edit: EditState): AudioBuffer {
+    70→  const sr = src.sampleRate;
+    71→  const trimStart = Math.min(edit.trimStartSec, Math.max(0, src.duration - 0.2));
+    72→  const trimEnd = edit.trimEndSec !== null ? Math.min(edit.trimEndSec, src.duration) : src.duration;
+    73→  const len = Math.max(1, Math.floor((trimEnd - trimStart) * sr));
+    74→  const out = ctx.createBuffer(2, len, sr);
+    75→  const fadeInN = Math.min(len, Math.floor(edit.fadeInSec * sr));
+    76→  const fadeOutN = Math.min(len, Math.floor(edit.fadeOutSec * sr));
+    77→  for (let ch = 0; ch < 2; ch++) {
+    78→    const inData = src.getChannelData(Math.min(ch, src.numberOfChannels - 1));
+    79→    const outData = out.getChannelData(ch);
+    80→    for (let i = 0; i < len; i++) {
+    81→      let g = edit.volume;
+    82→      if (i < fadeInN) g *= i / fadeInN;
+    83→      if (i >= len - fadeOutN) g *= (len - i) / fadeOutN;
+    84→      outData[i] = inData[trimStart * sr + i] * g;
+    85→    }
+    86→  }
+    87→  return out;
+    88→}
+    89→
+    90→// ---------- module ----------
+    91→
+    92→export function MusicModule() {
+    93→  const { t, locale } = useI18n();
+    94→  const activeBrandId = useApp((s) => s.activeBrandId);
+    95→
+    96→  const [caps, setCaps] = useState<Caps | null>(null);
+    97→  const [mode, setMode] = useState<"description" | "instrumental" | "soundtrack" | "song">("instrumental");
+    98→  const [description, setDescription] = useState("");
+    99→  const [preset, setPreset] = useState("lofi");
+   100→  const [tempo, setTempo] = useState(78);
+   101→  const [durationSec, setDurationSec] = useState(20);
+   102→  const [generating, setGenerating] = useState(false);
+   103→  const [result, setResult] = useState<GenResult | null>(null);
+   104→
+   105→  // lyrics
+   106→  const [theme, setTheme] = useState("");
+   107→  const [genre, setGenre] = useState("");
+   108→  const [writing, setWriting] = useState(false);
+   109→  const [lyrics, setLyrics] = useState("");
+   110→  const [lyricsCopied, setLyricsCopied] = useState(false);
+   111→
+   112→  // upload
+   113→  const [file, setFile] = useState<File | null>(null);
+   114→  const [uploadTitle, setUploadTitle] = useState("");
+   115→  const [uploading, setUploading] = useState(false);
+   116→  const [dragOver, setDragOver] = useState(false);
+   117→  const fileInputRef = useRef<HTMLInputElement>(null);
+   118→
+   119→  // library
+   120→  const [items, setItems] = useState<MusicAsset[]>([]);
+   121→  const [libLoading, setLibLoading] = useState(true);
+   122→  const [editing, setEditing] = useState<MusicAsset | null>(null);
+   123→  const [edit, setEdit] = useState<EditState>(DEFAULT_EDIT);
+   124→  const [savingEdit, setSavingEdit] = useState(false);
+   125→  const [decoding, setDecoding] = useState(false);
+   126→  const [previewPlaying, setPreviewPlaying] = useState(false);
+   127→  const audioCtxRef = useRef<AudioContext | null>(null);
+   128→  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+   129→
+   130→  const loadLibrary = useCallback(async () => {
+   131→    try {
+   132→      const res = await api<{ items: MusicAsset[] }>("/api/music");
+   133→      setItems(res.items ?? []);
+   134→    } catch {
+   135→      /* library stays — next reload retries */
+   136→    } finally {
+   137→      setLibLoading(false);
+   138→    }
+   139→  }, []);
+   140→
+   141→  useEffect(() => {
+   142→    api<Caps>("/api/generate/music", { method: "POST", body: JSON.stringify({ action: "capabilities" }) })
+   143→      .then(setCaps)
+   144→      .catch(() => undefined);
+   145→    loadLibrary();
+   146→  }, [loadLibrary]);
+   147→
+   148→  const applyPresetBpm = (p: string) => {
+   149→    setPreset(p);
+   150→    const found = caps?.presets.find((x) => x.id === p);
+   151→    if (found) setTempo(found.bpm);
+   152→  };
+   153→
+   154→  // ---------- generation ----------
+   155→  const generate = async (overrideSeed?: number) => {
+   156→    if (mode === "description" && !description.trim()) {
+   157→      toast.warning(t("studio.mus.needDescription"));
+   158→      return;
+   159→    }
+   160→    setGenerating(true);
+   161→    setResult(null);
+   162→    pulseCore("GENERATING");
+   163→    try {
+   164→      const payload: Record<string, unknown> = { mode, durationSec, brandId: activeBrandId ?? undefined };
+   165→      if (overrideSeed !== undefined) payload.seed = overrideSeed;
+   166→      if (mode === "description") payload.description = description;
+   167→      else { payload.preset = preset; payload.tempo = tempo; }
+   168→      const res = await api<GenResult>("/api/generate/music", { method: "POST", body: JSON.stringify(payload) });
+   169→      setResult(res);
+   170→      pulseCore("SUCCESS");
+   171→      toast.success(t("common.success"), { description: `${res.preset} · ${res.tempo} BPM · ${res.durationSec}s` });
+   172→      loadLibrary();
+   173→    } catch (err) {
+   174→      pulseCore("ERROR");
+   175→      showStudioError(t, err);
+   176→    } finally {
+   177→      setGenerating(false);
+   178→    }
+   179→  };
+   180→
+   181→  // ---------- lyrics ----------
+   182→  const writeLyrics = async () => {
+   183→    if (!theme.trim()) {
+   184→      toast.warning(t("studio.mus.lyrics.needTheme"));
+   185→      return;
+   186→    }
+   187→    setWriting(true);
+   188→    setLyrics("");
+   189→    pulseCore("GENERATING");
+   190→    try {
+   191→      const res = await api<{ id: string; lyrics: string }>("/api/generate/music", {
+   192→        method: "POST",
+   193→        body: JSON.stringify({ action: "lyrics", theme, genre, language: locale, brandId: activeBrandId ?? undefined }),
+   194→      });
+   195→      setLyrics(res.lyrics);
+   196→      pulseCore("SUCCESS");
+   197→      toast.success(t("common.success"));
+   198→      loadLibrary();
+   199→    } catch (err) {
+   200→      pulseCore("ERROR");
+   201→      showStudioError(t, err);
+   202→    } finally {
+   203→      setWriting(false);
+   204→    }
+   205→  };
+   206→
+   207→  const copyLyrics = async () => {
+   208→    try {
+   209→      await navigator.clipboard.writeText(lyrics);
+   210→      setLyricsCopied(true);
+   211→      toast.success(t("common.copied"));
+   212→      window.setTimeout(() => setLyricsCopied(false), 1600);
+   213→    } catch {
+   214→      toast.error(t("common.error"));
+   215→    }
+   216→  };
+   217→
+   218→  // ---------- upload ----------
+   219→  const acceptFile = (f: File | null | undefined) => {
+   220→    if (!f) return;
+   221→    if (!/^audio\//.test(f.type) && !/\.(mp3|wav|ogg|m4a|flac|aac|webm)$/i.test(f.name)) {
+   222→      toast.warning(t("studio.mus.upload.formats"), { description: f.name });
+   223→      return;
+   224→    }
+   225→    if (f.size > 25 * 1024 * 1024) {
+   226→      toast.warning(t("studio.mus.upload.formats"), { description: `${fmtSize(f.size)} > 25 MB` });
+   227→      return;
+   228→    }
+   229→    setFile(f);
+   230→  };
+   231→
+   232→  const upload = async () => {
+   233→    if (!file) {
+   234→      toast.warning(t("studio.mus.upload.needFile"));
+   235→      return;
+   236→    }
+   237→    setUploading(true);
+   238→    pulseCore("GENERATING");
+   239→    try {
+   240→      const dataUrl = await new Promise<string>((resolve, reject) => {
+   241→        const reader = new FileReader();
+   242→        reader.onload = () => resolve(String(reader.result ?? ""));
+   243→        reader.onerror = () => reject(new Error("File read failed"));
+   244→        reader.readAsDataURL(file);
+   245→      });
+   246→      await api<{ id: string }>("/api/music", {
+   247→        method: "POST",
+   248→        body: JSON.stringify({ action: "upload", base64: dataUrl, fileName: file.name, mimeType: file.type, title: uploadTitle, brandId: activeBrandId ?? undefined }),
+   249→      });
+   250→      setFile(null);
+   251→      setUploadTitle("");
+   252→      pulseCore("SUCCESS");
+   253→      toast.success(t("common.success"));
+   254→      loadLibrary();
+   255→    } catch (err) {
+   256→      pulseCore("ERROR");
+   257→      showStudioError(t, err);
+   258→    } finally {
+   259→      setUploading(false);
+   260→    }
+   261→  };
+   262→
+   263→  // ---------- edit dialog ----------
+   264→  const openEdit = (item: MusicAsset) => {
+   265→    const e = (item.meta?.edit ?? {}) as Partial<EditState>;
+   266→    setEdit({ ...DEFAULT_EDIT, ...e, trimEndSec: e.trimEndSec ?? null, duckDb: e.duckDb ?? null });
+   267→    setEditing(item);
+   268→    setPreviewPlaying(false);
+   269→  };
+   270→
+   271→  const stopPreview = useCallback(() => {
+   272→    if (sourceRef.current) {
+   273→      try { sourceRef.current.stop(); } catch { /* already stopped */ }
+   274→      sourceRef.current = null;
+   275→    }
+   276→    setPreviewPlaying(false);
+   277→  }, []);
+   278→
+   279→  const startPreview = async () => {
+   280→    if (!editing?.asset) return;
+   281→    stopPreview();
+   282→    setDecoding(true);
+   283→    try {
+   284→      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+   285→      const ctx = audioCtxRef.current;
+   286→      const res = await fetch(assetUrl(editing.asset.url));
+   287→      const buf = await ctx.decodeAudioData(await res.arrayBuffer());
+   288→      const preview = renderPreviewBuffer(ctx, buf, edit);
+   289→      const source = ctx.createBufferSource();
+   290→      source.buffer = preview;
+   291→      source.loop = edit.loop;
+   292→      source.connect(ctx.destination);
+   293→      source.onended = () => { sourceRef.current = null; setPreviewPlaying(false); };
+   294→      source.start();
+   295→      sourceRef.current = source;
+   296→      setPreviewPlaying(true);
+   297→    } catch {
+   298→      toast.error(t("common.error"));
+   299→    } finally {
+   300→      setDecoding(false);
+   301→    }
+   302→  };
+   303→
+   304→  const saveEdit = async () => {
+   305→    if (!editing) return;
+   306→    setSavingEdit(true);
+   307→    try {
+   308→      await api("/api/music", { method: "POST", body: JSON.stringify({ action: "edit", id: editing.id, edit }) });
+   309→      toast.success(t("studio.mus.edit.saved"));
+   310→      stopPreview();
+   311→      setEditing(null);
+   312→      loadLibrary();
+   313→    } catch (err) {
+   314→      showStudioError(t, err);
+   315→    } finally {
+   316→      setSavingEdit(false);
+   317→    }
+   318→  };
+   319→
+   320→  const remove = async (item: MusicAsset) => {
+   321→    try {
+   322→      await api(`/api/music?id=${encodeURIComponent(item.id)}`, { method: "DELETE" });
+   323→      toast.success(t("studio.mus.deleted"));
+   324→      loadLibrary();
+   325→    } catch (err) {
+   326→      showStudioError(t, err);
+   327→    }
+   328→  };
+   329→
+   330→  const download = (item: MusicAsset) => {
+   331→    if (!item.asset) return;
+   332→    const a = document.createElement("a");
+   333→    a.href = assetUrl(item.asset.url);
+   334→    a.download = item.asset.filename || `${item.title}.wav`;
+   335→    document.body.appendChild(a);
+   336→    a.click();
+   337→    a.remove();
+   338→  };
+   339→
+   340→  const sourceBadge = (s: string | null) => {
+   341→    if (s === "UPLOADED") return <Badge variant="outline" className="text-[10px]">{t("studio.mus.lib.source.uploaded")}</Badge>;
+   342→    if (s === "LYRICS") return <Badge variant="outline" className="text-[10px]">{t("studio.mus.lib.source.lyrics")}</Badge>;
+   343→    return <Badge variant="outline" className="border-[var(--neon)]/40 text-[10px] text-[var(--neon)]">{t("studio.mus.lib.source.generated")}</Badge>;
+   344→  };
+   345→
+   346→  return (
+   347→    <div className="grid gap-5">
+   348→      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
+   349→        <h1 className="text-xl font-semibold sm:text-2xl neon-text">{t("studio.mus.title")}</h1>
+   350→        <p className="mt-1 text-sm text-muted-foreground">{t("studio.mus.subtitle")}</p>
+   351→      </motion.section>
+   352→
+   353→      <div className="grid gap-5 lg:grid-cols-5">
+   354→        {/* generator */}
+   355→        <Card className="glass rounded-2xl lg:col-span-3">
+   356→          <CardHeader className="pb-3">
+   357→            <CardTitle className="flex items-center gap-2 text-base">
+   358→              <Music4 className="h-4 w-4 text-[var(--neon)]" /> {t("studio.mus.generate")}
+   359→            </CardTitle>
+   360→          </CardHeader>
+   361→          <CardContent className="grid gap-5">
+   362→            <div className="grid gap-2">
+   363→              <Label>{t("studio.mus.mode")}</Label>
+   364→              <Select value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+   365→                <SelectTrigger className="min-h-11 w-full"><SelectValue /></SelectTrigger>
+   366→                <SelectContent>
+   367→                  <SelectItem value="instrumental">{t("studio.mus.mode.instrumental")}</SelectItem>
+   368→                  <SelectItem value="soundtrack">{t("studio.mus.mode.soundtrack")}</SelectItem>
+   369→                  <SelectItem value="description">{t("studio.mus.mode.description")}</SelectItem>
+   370→                  <SelectItem value="song">{t("studio.mus.mode.song")} · 🔒</SelectItem>
+   371→                </SelectContent>
+   372→              </Select>
+   373→              {mode === "song" && (
+   374→                <div className="grid gap-1 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+   375→                  <p className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+   376→                    <Ban className="h-3.5 w-3.5" /> {t("studio.mus.provider.singing")}
+   377→                  </p>
+   378→                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+   379→                    {caps?.lyricsCapableProviders.join(" · ") || "—"}
+   380→                  </p>
+   381→                  <p className="text-[11px] leading-relaxed text-muted-foreground">{t("studio.mus.lyrics.honestNote")}</p>
+   382→                </div>
+   383→              )}
+   384→            </div>
+   385→
+   386→            {mode === "description" ? (
+   387→              <div className="grid gap-2">
+   388→                <Label htmlFor="mus-desc">{t("studio.mus.description")}</Label>
+   389→                <Textarea
+   390→                  id="mus-desc"
+   391→                  value={description}
+   392→                  onChange={(e) => setDescription(e.target.value.slice(0, 1000))}
+   393→                  placeholder={t("studio.mus.descriptionPh")}
+   394→                  rows={3}
+   395→                  className="resize-none"
+   396→                  maxLength={1000}
+   397→                />
+   398→              </div>
+   399→            ) : (
+   400→              <>
+   401→                <div className="grid gap-2">
+   402→                  <Label htmlFor="mus-preset">{t("studio.mus.preset")}</Label>
+   403→                  <Select value={preset} onValueChange={applyPresetBpm}>
+   404→                    <SelectTrigger id="mus-preset" className="min-h-11 w-full"><SelectValue /></SelectTrigger>
+   405→                    <SelectContent>
+   406→                      {PRESETS.map((p) => (
+   407→                        <SelectItem key={p} value={p}>{t(`studio.mus.preset.${p}`)}</SelectItem>
+   408→                      ))}
+   409→                    </SelectContent>
+   410→                  </Select>
+   411→                </div>
+   412→                <div className="grid gap-2">
+   413→                  <div className="flex items-center justify-between">
+   414→                    <Label htmlFor="mus-tempo">{t("studio.mus.tempo")}</Label>
+   415→                    <span className="font-mono text-xs text-[var(--neon-2)]">{t("studio.mus.tempoBpm", { n: tempo })}</span>
+   416→                  </div>
+   417→                  <Slider
+   418→                    id="mus-tempo"
+   419→                    value={[tempo]}
+   420→                    min={60}
+   421→                    max={140}
+   422→                    step={1}
+   423→                    onValueChange={(v) => setTempo(v[0] ?? 78)}
+   424→                    aria-label={t("studio.mus.tempo")}
+   425→                    className="w-full"
+   426→                  />
+   427→                </div>
+   428→              </>
+   429→            )}
+   430→
+   431→            <div className="grid gap-2">
+   432→              <Label htmlFor="mus-dur">{t("studio.mus.duration")}</Label>
+   433→              <Select value={String(durationSec)} onValueChange={(v) => setDurationSec(Number(v))}>
+   434→                <SelectTrigger id="mus-dur" className="min-h-11 w-full"><SelectValue /></SelectTrigger>
+   435→                <SelectContent>
+   436→                  {DURATIONS.map((d) => (
+   437→                    <SelectItem key={d} value={String(d)}>{t("studio.mus.durationSec", { n: d })}</SelectItem>
+   438→                  ))}
+   439→                </SelectContent>
+   440→              </Select>
+   441→            </div>
+   442→
+   443→            <div className="flex flex-wrap gap-2">
+   444→              <Button onClick={() => generate()} disabled={generating || mode === "song"} className="min-h-11 flex-1 gap-2 font-semibold">
+   445→                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+   446→                {generating ? t("studio.mus.generating") : t("studio.mus.generate")}
+   447→              </Button>
+   448→              {result && !generating && (
+   449→                <Button variant="outline" onClick={() => generate(Math.floor(Math.random() * 2 ** 31))} className="min-h-11 gap-2">
+   450→                  <RefreshCcw className="h-4 w-4 text-[var(--neon-2)]" /> {t("studio.mus.reroll")}
+   451→                </Button>
+   452→              )}
+   453→            </div>
+   454→
+   455→            {generating && <Skeleton className="h-14 rounded-xl bg-muted/40" />}
+   456→            {result && !generating && (
+   457→              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="grid gap-2 rounded-xl border border-[var(--neon-2)]/40 bg-muted/20 p-4">
+   458→                <span className="text-xs font-semibold uppercase tracking-wide text-[var(--neon-2)]">{t("studio.mus.result")}</span>
+   459→                <audio controls src={assetUrl(result.url)} className="w-full" aria-label={t("studio.mus.result")} />
+   460→                <p className="text-[11px] text-muted-foreground">
+   461→                  {t("studio.mus.resultNote", { bars: result.bars, seed: result.seed })}
+   462→                </p>
+   463→              </motion.div>
+   464→            )}
+   465→          </CardContent>
+   466→        </Card>
+   467→
+   468→        {/* right column */}
+   469→        <div className="grid content-start gap-5 lg:col-span-2">
+   470→          {/* upload */}
+   471→          <Card className="glass rounded-2xl">
+   472→            <CardHeader className="pb-3">
+   473→              <CardTitle className="flex items-center gap-2 text-base">
+   474→                <Upload className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.mus.upload.title")}
+   475→              </CardTitle>
+   476→            </CardHeader>
+   477→            <CardContent className="grid gap-4">
+   478→              <div
+   479→                role="button"
+   480→                tabIndex={0}
+   481→                aria-label={t("studio.mus.upload.dropzone")}
+   482→                onClick={() => fileInputRef.current?.click()}
+   483→                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
+   484→                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+   485→                onDragLeave={() => setDragOver(false)}
+   486→                onDrop={(e) => { e.preventDefault(); setDragOver(false); acceptFile(e.dataTransfer.files?.[0]); }}
+   487→                className={`dropzone flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-5 text-center transition ${
+   488→                  dragOver ? "dropzone-active" : "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--neon)]/60"
+   489→                }`}
+   490→              >
+   491→                <input
+   492→                  ref={fileInputRef}
+   493→                  type="file"
+   494→                  accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac,.webm"
+   495→                  className="hidden"
+   496→                  aria-hidden
+   497→                  tabIndex={-1}
+   498→                  onChange={(e) => { acceptFile(e.target.files?.[0]); e.currentTarget.value = ""; }}
+   499→                />
+   500→                {file ? (
+   501→                  <>
+   502→                    <FileAudio className="h-7 w-7 text-[var(--neon-2)]" aria-hidden />
+   503→                    <p className="max-w-full truncate px-2 text-sm font-medium">{file.name}</p>
+   504→                    <p className="text-[11px] text-muted-foreground">{fmtSize(file.size)}</p>
+   505→                    <Button
+   506→                      size="sm" variant="ghost" className="min-h-9 gap-1 text-xs"
+   507→                      onClick={(e) => { e.stopPropagation(); setFile(null); }}
+   508→                      aria-label={t("common.delete")}
+   509→                    >
+   510→                      <X className="h-3.5 w-3.5" aria-hidden /> {t("common.delete")}
+   511→                    </Button>
+   512→                  </>
+   513→                ) : (
+   514→                  <>
+   515→                    <Upload className="h-5 w-5 text-[var(--neon)]" aria-hidden />
+   516→                    <p className="text-sm font-medium">{t("studio.mus.upload.dropzone")}</p>
+   517→                    <p className="text-[11px] text-muted-foreground">{t("studio.mus.upload.formats")}</p>
+   518→                  </>
+   519→                )}
+   520→              </div>
+   521→              <Input value={uploadTitle} onChange={(e) => setUploadTitle(e.target.value.slice(0, 80))} placeholder={t("studio.mus.upload.namePh")} />
+   522→              <Button onClick={upload} disabled={uploading || !file} className="min-h-11 gap-2 font-semibold">
+   523→                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+   524→                {uploading ? t("studio.mus.upload.uploading") : t("studio.mus.upload.title")}
+   525→              </Button>
+   526→            </CardContent>
+   527→          </Card>
+   528→
+   529→          {/* honest capability status */}
+   530→          <Card className="glass rounded-2xl">
+   531→            <CardHeader className="pb-2">
+   532→              <CardTitle className="flex items-center gap-2 text-base">
+   533→                <Music className="h-4 w-4 text-[var(--neon-2)]" /> {t("studio.mus.provider.title")}
+   534→              </CardTitle>
+   535→            </CardHeader>
+   536→            <CardContent className="grid gap-2 text-xs leading-relaxed">
+   537→              <p className="flex items-start gap-2">
+   538→                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--neon)]" aria-hidden />
+   539→                <span>{t("studio.mus.provider.synth")}</span>
+   540→              </p>
+   541→              <p className="flex items-start gap-2">
+   542→                <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+   543→                <span>{t("studio.mus.provider.singing")}: {caps?.lyricsCapableProviders.join(" · ") || "—"}</span>
+   544→              </p>
+   545→            </CardContent>
+   546→          </Card>
+   547→        </div>
+   548→      </div>
+   549→
+   550→      {/* lyricist */}
+   551→      <Card className="glass rounded-2xl">
+   552→        <CardHeader className="pb-3">
+   553→          <CardTitle className="flex items-center gap-2 text-base">
+   554→            <Mic2 className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.mus.lyrics.title")}
+   555→          </CardTitle>
+   556→        </CardHeader>
+   557→        <CardContent className="grid gap-4 lg:grid-cols-2">
+   558→          <div className="grid content-start gap-4">
+   559→            <div className="grid gap-2">
+   560→              <Label htmlFor="mus-theme">{t("studio.mus.lyrics.theme")}</Label>
+   561→              <Input id="mus-theme" value={theme} onChange={(e) => setTheme(e.target.value.slice(0, 1000))} placeholder={t("studio.mus.lyrics.themePh")} maxLength={1000} />
+   562→            </div>
+   563→            <div className="grid gap-2">
+   564→              <Label htmlFor="mus-genre">{t("studio.mus.lyrics.genre")}</Label>
+   565→              <Input id="mus-genre" value={genre} onChange={(e) => setGenre(e.target.value.slice(0, 60))} placeholder={t("studio.mus.lyrics.genrePh")} maxLength={60} />
+   566→            </div>
+   567→            <Button onClick={writeLyrics} disabled={writing} className="min-h-11 gap-2 font-semibold">
+   568→              {writing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic2 className="h-4 w-4" />}
+   569→              {writing ? t("studio.mus.lyrics.writing") : t("studio.mus.lyrics.write")}
+   570→            </Button>
+   571→            <p className="text-[11px] leading-relaxed text-muted-foreground">{t("studio.mus.lyrics.honestNote")}</p>
+   572→          </div>
+   573→          <div className="grid content-start gap-2">
+   574→            <div className="flex items-center justify-between">
+   575→              <Label>{t("studio.mus.lib.source.lyrics")}</Label>
+   576→              {lyrics && (
+   577→                <Button size="icon" variant="outline" className="h-8 w-8" onClick={copyLyrics} aria-label={t("common.copy")}>
+   578→                  {lyricsCopied ? <Check className="h-3.5 w-3.5 text-[var(--neon-2)]" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+   579→                </Button>
+   580→              )}
+   581→            </div>
+   582→            <Textarea
+   583→              value={lyrics}
+   584→              onChange={(e) => setLyrics(e.target.value)}
+   585→              placeholder={writing ? t("studio.mus.lyrics.writing") : ""}
+   586→              rows={10}
+   587→              className="resize-none font-mono text-xs"
+   588→              disabled={writing}
+   589→            />
+   590→          </div>
+   591→        </CardContent>
+   592→      </Card>
+   593→
+   594→      {/* library */}
+   595→      <Card className="glass rounded-2xl">
+   596→        <CardHeader className="pb-3">
+   597→          <CardTitle className="flex items-center gap-2 text-base">
+   598→            <Library className="h-4 w-4 text-[var(--neon-2)]" /> {t("studio.mus.lib.title")}
+   599→            {items.length > 0 && <Badge variant="outline" className="text-[10px]">{items.length}</Badge>}
+   600→          </CardTitle>
+   601→        </CardHeader>
+   602→        <CardContent>
+   603→          {libLoading ? (
+   604→            <div className="grid gap-2">
+   605→              <Skeleton className="h-20 rounded-xl bg-muted/40" />
+   606→              <Skeleton className="h-20 rounded-xl bg-muted/40" />
+   607→            </div>
+   608→          ) : items.length === 0 ? (
+   609→            <p className="py-6 text-center text-sm text-muted-foreground">{t("studio.mus.lib.empty")}</p>
+   610→          ) : (
+   611→            <ul className="grid max-h-96 gap-3 overflow-y-auto scrollbar-thin">
+   612→              {items.map((item) => (
+   613→                <li key={item.id} className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 lg:grid-cols-[1fr_240px] lg:items-center">
+   614→                  <div className="grid min-w-0 gap-2">
+   615→                    <div className="flex flex-wrap items-center gap-2">
+   616→                      <p className="truncate text-sm font-medium">{item.title}</p>
+   617→                      {sourceBadge(item.source)}
+   618→                      {item.durationSec != null && (
+   619→                        <span className="font-mono text-[10px] text-muted-foreground">{Math.round(item.durationSec)}s</span>
+   620→                      )}
+   621→                    </div>
+   622→                    {item.stylePrompt && <p className="line-clamp-1 text-[11px] text-muted-foreground">{item.stylePrompt}</p>}
+   623→                    {item.lyrics && (
+   624→                      <p className="line-clamp-2 whitespace-pre-line text-[11px] text-muted-foreground">{item.lyrics}</p>
+   625→                    )}
+   626→                    <div className="flex flex-wrap gap-1.5">
+   627→                      {item.asset && (
+   628→                        <>
+   629→                          <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => openEdit(item)}>
+   630→                            <Settings2 className="h-3 w-3" /> {t("studio.mus.lib.edit")}
+   631→                          </Button>
+   632→                          <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => download(item)}>
+   633→                            <Download className="h-3 w-3" /> {t("studio.mus.lib.download")}
+   634→                          </Button>
+   635→                        </>
+   636→                      )}
+   637→                      {item.lyrics && (
+   638→                        <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={async () => { await navigator.clipboard.writeText(item.lyrics ?? ""); toast.success(t("common.copied")); }}>
+   639→                          <Copy className="h-3 w-3" /> {t("studio.mus.lib.copyLyrics")}
+   640→                        </Button>
+   641→                      )}
+   642→                      <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs text-destructive hover:text-destructive" onClick={() => remove(item)}>
+   643→                        <Trash2 className="h-3 w-3" /> {t("common.delete")}
+   644→                      </Button>
+   645→                    </div>
+   646→                  </div>
+   647→                  {item.asset ? (
+   648→                    <audio controls src={assetUrl(item.asset.url)} className="h-10 w-full lg:w-[240px]" aria-label={item.title} />
+   649→                  ) : (
+   650→                    <span className="text-[11px] text-muted-foreground lg:text-right">{t("studio.mus.lib.noAudio")}</span>
+   651→                  )}
+   652→                </li>
+   653→              ))}
+   654→            </ul>
+   655→          )}
+   656→        </CardContent>
+   657→      </Card>
+   658→
+   659→      {/* edit dialog */}
+   660→      <Dialog open={!!editing} onOpenChange={(open) => { if (!open) { stopPreview(); setEditing(null); } }}>
+   661→        <DialogContent className="glass-strong max-h-[90vh] overflow-y-auto rounded-2xl border-border/60 scrollbar-thin">
+   662→          <DialogHeader>
+   663→            <DialogTitle className="neon-text">{t("studio.mus.edit.title")}</DialogTitle>
+   664→          </DialogHeader>
+   665→          <div className="grid gap-5 py-1">
+   666→            <div className="grid gap-2">
+   667→              <div className="flex items-center justify-between">
+   668→                <Label htmlFor="mus-vol">{t("studio.mus.edit.volume")}</Label>
+   669→                <span className="font-mono text-xs text-[var(--neon-2)]">{Math.round(edit.volume * 100)}%</span>
+   670→              </div>
+   671→              <Slider id="mus-vol" value={[edit.volume]} min={0} max={2} step={0.05}
+   672→                onValueChange={(v) => setEdit({ ...edit, volume: v[0] ?? 1 })}
+   673→                aria-label={t("studio.mus.edit.volume")} className="w-full" />
+   674→            </div>
+   675→            <div className="grid grid-cols-2 gap-3">
+   676→              <div className="grid gap-2">
+   677→                <Label htmlFor="mus-trim-start">{t("studio.mus.edit.trimStart")}</Label>
+   678→                <Input id="mus-trim-start" type="number" min={0} max={600} step={0.5} value={edit.trimStartSec}
+   679→                  onChange={(e) => setEdit({ ...edit, trimStartSec: Math.max(0, Number(e.target.value) || 0) })} />
+   680→              </div>
+   681→              <div className="grid gap-2">
+   682→                <Label htmlFor="mus-trim-end">{t("studio.mus.edit.trimEnd")}</Label>
+   683→                <Input id="mus-trim-end" type="number" min={0} max={600} step={0.5}
+   684→                  value={edit.trimEndSec ?? ""}
+   685→                  placeholder={t("studio.mus.edit.trimNone")}
+   686→                  onChange={(e) => setEdit({ ...edit, trimEndSec: e.target.value === "" ? null : Math.max(0, Number(e.target.value) || 0) })} />
+   687→              </div>
+   688→              <div className="grid gap-2">
+   689→                <Label htmlFor="mus-fade-in">{t("studio.mus.edit.fadeIn")}</Label>
+   690→                <Input id="mus-fade-in" type="number" min={0} max={10} step={0.5} value={edit.fadeInSec}
+   691→                  onChange={(e) => setEdit({ ...edit, fadeInSec: Math.max(0, Number(e.target.value) || 0) })} />
+   692→              </div>
+   693→              <div className="grid gap-2">
+   694→                <Label htmlFor="mus-fade-out">{t("studio.mus.edit.fadeOut")}</Label>
+   695→                <Input id="mus-fade-out" type="number" min={0} max={10} step={0.5} value={edit.fadeOutSec}
+   696→                  onChange={(e) => setEdit({ ...edit, fadeOutSec: Math.max(0, Number(e.target.value) || 0) })} />
+   697→              </div>
+   698→            </div>
+   699→            <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
+   700→              <Label htmlFor="mus-loop" className="cursor-pointer">{t("studio.mus.edit.loop")}</Label>
+   701→              <Switch id="mus-loop" checked={edit.loop} onCheckedChange={(v) => setEdit({ ...edit, loop: v })} />
+   702→            </div>
+   703→            <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
+   704→              <div className="flex items-center justify-between">
+   705→                <Label htmlFor="mus-duck" className="cursor-pointer">{t("studio.mus.edit.duck")}</Label>
+   706→                <Switch id="mus-duck" checked={edit.duckEnabled} onCheckedChange={(v) => setEdit({ ...edit, duckEnabled: v, duckDb: v ? (edit.duckDb ?? -12) : null })} />
+   707→              </div>
+   708→              {edit.duckEnabled && (
+   709→                <>
+   710→                  <div className="grid gap-2">
+   711→                    <div className="flex items-center justify-between">
+   712→                      <Label htmlFor="mus-duck-db">{t("studio.mus.edit.duckDb")}</Label>
+   713→                      <span className="font-mono text-xs text-[var(--neon-2)]">{edit.duckDb ?? -12} dB</span>
+   714→                    </div>
+   715→                    <Slider id="mus-duck-db" value={[edit.duckDb ?? -12]} min={-24} max={-3} step={1}
+   716→                      onValueChange={(v) => setEdit({ ...edit, duckDb: v[0] ?? -12 })}
+   717→                      aria-label={t("studio.mus.edit.duckDb")} className="w-full" />
+   718→                  </div>
+   719→                  <p className="text-[11px] leading-relaxed text-muted-foreground">{t("studio.mus.edit.duckNote")}</p>
+   720→                </>
+   721→              )}
+   722→            </div>
+   723→            {decoding && <p className="text-center text-xs text-muted-foreground">{t("studio.mus.edit.decoding")}</p>}
+   724→          </div>
+   725→          <DialogFooter className="flex-wrap gap-2 sm:justify-between">
+   726→            <Button variant="outline" onClick={previewPlaying ? stopPreview : startPreview} disabled={!editing?.asset || decoding} className="min-h-11 gap-2">
+   727→              {previewPlaying ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+   728→              {previewPlaying ? t("studio.mus.edit.stop") : t("studio.mus.edit.preview")}
+   729→            </Button>
+   730→            <div className="flex gap-2">
+   731→              <Button variant="ghost" className="min-h-11" onClick={() => { stopPreview(); setEditing(null); }}>{t("common.cancel")}</Button>
+   732→              <Button className="min-h-11 gap-2" onClick={saveEdit} disabled={savingEdit}>
+   733→                {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+   734→                {t("common.save")}
+   735→              </Button>
+   736→            </div>
+   737→          </DialogFooter>
+   738→        </DialogContent>
+   739→      </Dialog>
+   740→    </div>
+   741→  );
+   742→}
+   743→

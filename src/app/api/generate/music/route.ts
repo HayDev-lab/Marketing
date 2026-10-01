@@ -19,6 +19,7 @@ import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { saveAssetBuffer, llmCompleteJson, llmComplete } from "@/lib/ai/zai";
 import { getMusicAdapter, resolveMusicRoute, SYNTH_CAPS } from "@/lib/music/adapter";
+import { assertRouteAllowed } from "@/lib/ai/system-config";
 import { SYNTH_PRESETS, presetById } from "@/lib/music/synth";
 
 const ALLOWED_PRESETS = SYNTH_PRESETS.map((p) => p.id);
@@ -136,6 +137,9 @@ export async function POST(req: NextRequest) {
     const adapter = getMusicAdapter("haydev-synth");
     const route = resolveMusicRoute(mode === "description" ? "description" : mode === "soundtrack" ? "soundtrack" : "instrumental");
     if (!adapter || !route.route) throw new ApiError(503, "NO_PROVIDER", "No music provider available");
+
+    // §30 platform guard: admin disabled providers / blacklisted models / user-disabled provider
+    await assertRouteAllowed({ providerId: route.route.providerId, modelId: route.route.modelId }, user.id);
 
     // Synth is local & free, but counts against the plan's monthly music cap.
     const estimatedCost = 0;

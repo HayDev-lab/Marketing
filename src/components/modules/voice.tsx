@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   AudioLines, Loader2, Save, Music, Music4, UserSquare, Ban, History, BookmarkCheck,
-  Mic, FileAudio, Copy, X, Check,
+  Mic, FileAudio, Copy, X, Check, ScanFace,
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api, assetUrl } from "@/lib/use-i18n";
@@ -365,6 +365,14 @@ export function VoiceModule() {
                   {avatarProvider.status}: {avatarProvider.statusNote}
                 </p>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 gap-2"
+                onClick={() => useApp.getState().setView("avatar")}
+              >
+                <ScanFace className="h-4 w-4 text-[var(--neon)]" /> {t("studio.voc.openAvatar")}
+              </Button>
               <Textarea disabled rows={2} placeholder={t("studio.voc.disabledHint")} aria-label={t("studio.voc.disabledHint")} className="resize-none opacity-50" />
               <Button disabled className="min-h-11 gap-2 opacity-50">
                 <Ban className="h-4 w-4" /> {t("common.generate")}

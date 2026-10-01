@@ -4,15 +4,22 @@ import { ok, handle, ApiError, requireUser } from "@/lib/api";
 import { audit } from "@/lib/ledger";
 import { PROVIDER_REGISTRY, type ProviderStatus } from "@/lib/ai/registry";
 import { healthCheck } from "@/lib/ai/zai";
+import { getSystemConfig, ADMIN_CONFIG_KEYS, type SwitchDefaults } from "@/lib/ai/system-config";
 
 // GET /api/settings/providers — registry + user config (secrets never returned — none stored)
 export async function GET() {
   return handle(async () => {
     const user = await requireUser();
     const configs = await db.providerConfig.findMany({ where: { userId: user.id } });
+    // §30: platform-wide switch defaults from the admin — used as the DEFAULT
+    // when the user has no explicit per-user override. Explicit user settings
+    // always win; BLOCKED_EXTERNAL providers can never default to enabled.
+    const defaults = (await getSystemConfig<SwitchDefaults>(ADMIN_CONFIG_KEYS.switchDefaults)) ?? {};
     // Merge registry (source of truth) with user overrides
     const merged = PROVIDER_REGISTRY.map((p) => {
       const cfg = configs.find((c) => c.providerId === p.providerId);
+      const registryDefault = p.status !== "BLOCKED_EXTERNAL";
+      const platformDefault = p.providerId in defaults ? Boolean(defaults[p.providerId]) && registryDefault : registryDefault;
       return {
         providerId: p.providerId,
         title: p.title,
@@ -22,7 +29,7 @@ export async function GET() {
         requiresExternalKey: p.requiresExternalKey ?? false,
         supportsHealthCheck: p.supportsHealthCheck,
         statusNote: p.statusNote,
-        enabled: cfg?.enabled ?? p.status !== "BLOCKED_EXTERNAL",
+        enabled: cfg?.enabled ?? platformDefault,
         status: (cfg?.status ?? p.status) as ProviderStatus,
         defaultModel: cfg?.defaultModel ?? p.defaultModel,
         lastHealthAt: cfg?.lastHealthAt,

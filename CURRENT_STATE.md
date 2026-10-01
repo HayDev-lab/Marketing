@@ -31,10 +31,11 @@
 ## Что отсутствует (gap против спеки)
 
 1. ~~§31 Subscriptions (FREE/CREATOR/PRO/BUSINESS) + SubscriptionModelPolicy + кредитные квоты~~ — ✅ РЕАЛИЗОВАНО (Task 20): модель `Subscription`, `src/lib/subscription.ts` (PLANS + assertQuota/assertBrandQuota), `/api/subscription` GET/switch, UI-вкладка «Տարիֆ» в Settings, квоты встроены в image/video/tts/brands, i18n ×3. Billing-процессора нет — переключение честное sandbox-switch.
-2. §24 Talking Avatar Studio — ❌ нет (нужен plugin-провайдер; след. раунд).
-3. §20-21 Music (own upload + generation) — ⚠️ модель `MusicAsset` есть, генерации/загрузки нет.
-4. §30 Внутренний админ-конфиг (switch defaults, disable models) — ⚠️ частично через `settings/providers`; отдельного admin-view нет.
-5. Email-доставка (SMTP) для reset — dev_inline честный режим.
+2. §24 Talking Avatar Studio — ✅ Round 13: честный BLOCKED-адаптер + plugin-слот (`src/lib/avatar/adapter.ts`, `api/generate/avatar`), UI-модуль; активация = HEYGEN_API_KEY + implement generate().
+3. §20-21 Music — ✅ Round 12 (upload + синтез + редактирование).
+4. §30 Внутренний админ-конфиг — ✅ Round 13: `User.isAdmin`, `SystemConfig`, `api/admin`, AdminTab (stats/switches/blacklist/promote), 423-гварды в image/tts/music/video.
+5. Email-доставка (SMTP) для reset — dev_inline честный режим (БЕЗ изменений).
+6. Пер-сценная озвучка видео — ✅ Round 13: VideoScene.voiceAssetId + voiceDurationSec (ffprobe), миксдаун по реальным оффсетам + sidechain duck, «Озвучить все» на клиенте.
 
 ## Что опасно менять
 

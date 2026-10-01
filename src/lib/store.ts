@@ -15,6 +15,7 @@ export type ViewId =
   | "video"
   | "voice"
   | "music"
+  | "avatar"
   | "publishing"
   | "analytics"
   | "settings"
@@ -36,6 +37,7 @@ export interface SessionUser {
   email: string;
   name?: string | null;
   locale: string;
+  isAdmin?: boolean;
 }
 
 interface AppState {

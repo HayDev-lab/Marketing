@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       const sessionToken = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.register", summary: `User registered: ${email}` });
       // sessionToken: needed when cookies are unavailable (cross-site iframe preview)
-      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, sessionToken });
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, isAdmin: user.isAdmin, sessionToken });
     }
 
     if (action === "login") {
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
       }
       const sessionToken = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.login", summary: `User logged in` });
-      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, sessionToken });
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, isAdmin: user.isAdmin, sessionToken });
     }
 
     if (action === "demo") {
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
       }
       const sessionToken = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
       await audit.log({ userId: user.id, action: "auth.demo", summary: "Demo workspace login" });
-      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, demo: true, sessionToken });
+      return ok({ id: user.id, email: user.email, name: user.name, locale: user.locale, isAdmin: user.isAdmin, demo: true, sessionToken });
     }
 
     if (action === "request-reset") {

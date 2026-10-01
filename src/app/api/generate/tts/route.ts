@@ -5,6 +5,7 @@ import { audit, ledger } from "@/lib/ledger";
 import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability } from "@/lib/ai/registry";
+import { assertRouteAllowed } from "@/lib/ai/system-config";
 import { ttsGenerate, saveAssetBase64, llmComplete } from "@/lib/ai/zai";
 
 // POST /api/generate/tts — voiceover generation (script + voice params persisted verbatim)
@@ -50,6 +51,8 @@ export async function POST(req: NextRequest) {
     if (route.status === "BLOCKED_EXTERNAL") {
       throw new ApiError(503, "PROVIDER_BLOCKED", `Provider ${route.providerId}: ${route.status ?? ""} — external API key not configured. Use the available provider or configure the key in Settings.`);
     }
+    // §30 platform guard: admin disabled providers / blacklisted models / user-disabled provider
+    await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
 
     const estimatedCost = 0.005;
     await assertQuota(user.id, "TTS", estimatedCost);

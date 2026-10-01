@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard, Building2, Flame, CalendarRange, FileStack, Library,
   ImageIcon, Clapperboard, AudioLines, Send, BarChart3, Settings, Plug,
-  Command, Hand, Zap, Languages, Search,
+  Command, Hand, Zap, Languages, Search, ScanFace,
 } from "lucide-react";
 import {
   CommandDialog, CommandInput, CommandList, CommandEmpty,
@@ -25,6 +25,7 @@ const NAV_ITEMS: { id: ViewId; icon: React.ComponentType<{ className?: string }>
   { id: "image", icon: ImageIcon, key: "nav.image", shortcut: "G I" },
   { id: "video", icon: Clapperboard, key: "nav.video", shortcut: "G V" },
   { id: "voice", icon: AudioLines, key: "nav.voice", shortcut: "G O" },
+  { id: "avatar", icon: ScanFace, key: "nav.avatar", shortcut: "G F" },
   { id: "music", icon: Music4, key: "nav.music", shortcut: "G U" },
   { id: "publishing", icon: Send, key: "nav.publishing", shortcut: "G S" },
   { id: "analytics", icon: BarChart3, key: "nav.analytics", shortcut: "G A" },
@@ -71,7 +72,7 @@ export function CommandPalette() {
         const letter = e.key.toLowerCase();
         const map: Record<string, ViewId> = {
           d: "dashboard", b: "brands", t: "trends", p: "planner", c: "content",
-          l: "prompts", i: "image", v: "video", o: "voice", u: "music", s: "publishing",
+          l: "prompts", i: "image", v: "video", o: "voice", f: "avatar", u: "music", s: "publishing",
           a: "analytics", ",": "settings", m: "mcp",
         };
         gArmed = false;
@@ -163,7 +164,7 @@ export function CommandPalette() {
         <span className="inline-flex items-center gap-1.5">
           <Command className="h-3 w-3" aria-hidden /> K — {t("cmd.title")}
         </span>
-        <span className="hidden font-mono sm:inline" aria-live="polite">{seq ? seq + "…" : "G→D B T P C L I V O S A , M"}</span>
+        <span className="hidden font-mono sm:inline" aria-live="polite">{seq ? seq + "…" : "G→D B T P C L I V O F U S A , M"}</span>
       </div>
     </CommandDialog>
   );

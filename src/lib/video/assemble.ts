@@ -89,7 +89,7 @@ interface ProbeResult {
   hasAudio: boolean;
 }
 
-async function probeMedia(file: string): Promise<ProbeResult> {
+export async function probeMedia(file: string): Promise<ProbeResult> {
   if (!existsSync(file)) throw new ApiError(409, "SOURCE_MISSING", `Source file missing on disk: ${path.basename(file)}`);
   const out = await run("ffprobe", [
     "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file,
@@ -175,6 +175,7 @@ export async function runAssemblyJob(jobId: string) {
   try {
     // ---- 1+2: normalize every ready scene to project geometry (video-only) ----
     const normFiles: string[] = [];
+    const normDurations: number[] = [];
     for (const scene of ready) {
       const media = await db.mediaAsset.findUnique({ where: { id: scene.assetId! } });
       if (!media) throw new ApiError(404, "SOURCE_MISSING", `Scene ${scene.order + 1} media asset missing`);
@@ -190,6 +191,9 @@ export async function runAssemblyJob(jobId: string) {
         "-movflags", "+faststart",
         out,
       ], `normalize scene ${scene.order + 1}`);
+      // exact normalized length — the per-scene voice offsets depend on the REAL timeline
+      const normProbe = await probeMedia(out);
+      normDurations.push(normProbe.durationSec);
       normFiles.push(out);
     }
 
@@ -202,28 +206,169 @@ export async function runAssemblyJob(jobId: string) {
     const videoDur = concatProbe.durationSec;
 
     // ---- 4: audio mixdown — soundtrack (edit-intents §20) + voiceover (real sidechain duck) ----
+    // Voiceover source resolution (honest priority):
+    //   mode=perScene  → per-scene TTS clips (VideoScene.voiceAssetId) placed at their REAL
+  //                    normalized offsets; falls back to the single track only when NO scene
+  //                    carries a voice (recorded in editApplied as an honest note).
+    //   otherwise      → the single project-level narration track (metaJson.voiceover.assetId)
     const voiceover = (projMeta.voiceover ?? null) as {
-      assetId?: string; enabled?: boolean; duckMusic?: boolean;
+      assetId?: string; enabled?: boolean; duckMusic?: boolean; mode?: string;
     } | null;
+    const perSceneRequested = voiceover?.mode === "perScene";
+    interface SceneVoice { sceneId: string; order: number; assetId: string; offsetSec: number; clipDur: number; voiceDur: number | null; }
+    const sceneVoices: SceneVoice[] = [];
+    if (perSceneRequested) {
+      let acc = 0;
+      for (let i = 0; i < ready.length; i++) {
+        const scene = ready[i];
+        if (scene.voiceAssetId) {
+          sceneVoices.push({
+            sceneId: scene.id,
+            order: scene.order,
+            assetId: scene.voiceAssetId,
+            offsetSec: acc,
+            clipDur: normDurations[i] ?? scene.durationSec,
+            voiceDur: scene.voiceDurationSec ?? null,
+          });
+        }
+        acc += normDurations[i] ?? scene.durationSec;
+      }
+    }
     let voiceFile: string | null = null;
     let voiceMissing = false;
-    if (voiceover?.assetId && voiceover.enabled !== false) {
-      const voAsset = await db.mediaAsset.findUnique({ where: { id: voiceover.assetId } });
-      if (voAsset) voiceFile = path.join(UPLOADS_DIR, voAsset.storageKey);
-      else voiceMissing = true; // honest: narration asset deleted from library — proceed without it
+    let perSceneActive = false;
+    let perSceneFallbackNote: string | null = null;
+    if (perSceneRequested && sceneVoices.length > 0) {
+      perSceneActive = true;
+    } else {
+      if (perSceneRequested) {
+        perSceneFallbackNote = "per-scene mode requested but no scene carries a voice clip";
+      }
+      if (voiceover?.assetId && voiceover.enabled !== false) {
+        const voAsset = await db.mediaAsset.findUnique({ where: { id: voiceover.assetId } });
+        if (voAsset) voiceFile = path.join(UPLOADS_DIR, voAsset.storageKey);
+        else voiceMissing = true; // honest: narration asset deleted from library — proceed without it
+      }
+    }
+
+    // Resolve per-scene voice files (missing assets are skipped honestly, not fatal)
+    const sceneVoiceFiles: { voice: SceneVoice; file: string }[] = [];
+    let sceneVoicesMissing = 0;
+    if (perSceneActive) {
+      for (const v of sceneVoices) {
+        const asset = await db.mediaAsset.findUnique({ where: { id: v.assetId } });
+        if (asset) sceneVoiceFiles.push({ voice: v, file: path.join(UPLOADS_DIR, asset.storageKey) });
+        else sceneVoicesMissing += 1;
+      }
+      if (sceneVoiceFiles.length === 0) {
+        perSceneActive = false;
+        perSceneFallbackNote = "per-scene voice assets missing on disk";
+      }
     }
 
     let finalFile = concatFile;
     const editApplied: Record<string, unknown> = { music: false, voice: false };
-    // Ducking decision: when a voiceover rides in the mix, duck the music by default.
+    // Ducking decision: when any voice rides in the mix, duck the music by default.
     // music-edit duckDb (§20) sets how hard the sidechain pulls the music down.
-    const duckApplied = Boolean(voiceFile && musicFile && voiceover?.duckMusic !== false);
+    const anyVoice = perSceneActive || Boolean(voiceFile);
+    const duckApplied = Boolean(musicFile && anyVoice && voiceover?.duckMusic !== false);
     const duckDb = edit.duckDb ?? -12;
     const duckThreshold = Math.min(0.4, Math.max(0.005, Math.pow(10, duckDb / 20) * 0.3));
 
-    if (musicFile && voiceFile) {
+    if (musicFile) await probeMedia(musicFile); // honest failure if soundtrack file missing
+
+    if (perSceneActive) {
+      // ---- per-scene mixdown: music chain + N delayed voice clips → duck → amix ----
+      const inputIdx = (i: number) => (musicFile ? 2 : 1) + i;
+      const parts: string[] = [];
+      if (musicFile) {
+        const musicProbe = await probeMedia(musicFile);
+        const tStart = Math.min(edit.trimStartSec ?? 0, Math.max(0, musicProbe.durationSec - 0.5));
+        const tEnd = edit.trimEndSec != null ? Math.min(edit.trimEndSec, musicProbe.durationSec) : musicProbe.durationSec;
+        const trimmedDur = Math.max(0.2, tEnd - tStart);
+        const fits = trimmedDur >= videoDur - 0.05;
+        const audioEnd = edit.loop ? videoDur : Math.min(trimmedDur, videoDur);
+        const fadeIn = Math.min(edit.fadeInSec ?? 0, audioEnd);
+        const fadeOut = Math.min(edit.fadeOutSec ?? 0, Math.max(0, audioEnd - fadeIn));
+        const musicChain = [
+          "atrim=start=" + tStart.toFixed(3) + ":end=" + tEnd.toFixed(3),
+          "asetpts=PTS-STARTPTS",
+          fadeIn > 0.01 ? `afade=t=in:st=0:d=${fadeIn.toFixed(3)}` : null,
+          fadeOut > 0.01 ? `afade=t=out:st=${Math.max(0, audioEnd - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}` : null,
+          `volume=${Math.min(2, Math.max(0, edit.volume ?? 1)).toFixed(3)}`,
+          "aresample=44100",
+          "apad=whole_dur=" + videoDur.toFixed(3),
+        ].filter(Boolean).join(",");
+        parts.push(`[1:a]${musicChain}[m];`);
+        Object.assign(editApplied, {
+          music: true,
+          musicAssetId: soundtrack?.musicAssetId,
+          volume: edit.volume,
+          loop: edit.loop && !fits,
+        });
+      }
+
+      const overflowScenes: number[] = [];
+      let totalVoiceSec = 0;
+      const voiceLabels: string[] = [];
+      for (let i = 0; i < sceneVoiceFiles.length; i++) {
+        const { voice, file } = sceneVoiceFiles[i];
+        const probe = await probeMedia(file);
+        const spoken = voice.voiceDur ?? probe.durationSec;
+        totalVoiceSec += spoken;
+        if (voice.voiceDur != null && voice.voiceDur > voice.clipDur + 0.05) overflowScenes.push(voice.order + 1);
+        const ms = Math.max(0, Math.round(voice.offsetSec * 1000));
+        parts.push(
+          `[${inputIdx(i)}:a]aresample=44100,adelay=${ms}:all=1,apad=whole_dur=${videoDur.toFixed(3)}[vs${i}];`
+        );
+        voiceLabels.push(`[vs${i}]`);
+      }
+
+      // mix the (non-overlapping-in-plan) voice clips into one full-length voice track
+      let voiceTrackLabel: string;
+      if (voiceLabels.length === 1) {
+        voiceTrackLabel = voiceLabels[0];
+      } else {
+        parts.push(`${voiceLabels.join("")}amix=inputs=${voiceLabels.length}:duration=longest:normalize=0[vsum];`);
+        voiceTrackLabel = "[vsum]";
+      }
+
+      let aoutLabel: string;
+      if (musicFile && duckApplied) {
+        // vsum feeds the sidechain AND the final mix → asplit (ffmpeg forbids unconnected pads)
+        parts.push(`${voiceTrackLabel}asplit=2[vsc][vmix];`);
+        parts.push(`[m][vsc]sidechaincompress=threshold=${duckThreshold.toFixed(4)}:ratio=8:attack=25:release=450[md];`);
+        parts.push(`[md][vmix]amix=inputs=2:duration=longest:normalize=0[aout]`);
+        aoutLabel = "[aout]";
+      } else if (musicFile) {
+        parts.push(`[m]${voiceTrackLabel}amix=inputs=2:duration=longest:normalize=0[aout]`);
+        aoutLabel = "[aout]";
+      } else {
+        aoutLabel = voiceTrackLabel;
+      }
+
+      finalFile = path.join(tmp, "final.mp4");
+      const args = ["-y", "-i", concatFile];
+      if (musicFile) args.push("-i", musicFile);
+      for (const { file } of sceneVoiceFiles) args.push("-i", file);
+      args.push("-filter_complex", parts.join(""), "-map", "0:v:0", "-map", aoutLabel);
+      args.push("-t", videoDur.toFixed(3), "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", finalFile);
+      await run("ffmpeg", args, "per-scene voice mixdown");
+      Object.assign(editApplied, {
+        voice: {
+          applied: true,
+          mode: "perScene",
+          voicedScenes: sceneVoiceFiles.map((v) => v.voice.order + 1),
+          missingVoiceAssets: sceneVoicesMissing,
+          totalVoiceSec: Number(totalVoiceSec.toFixed(2)),
+          overflowIntoNext: overflowScenes.length ? overflowScenes : null,
+          duck: duckApplied ? { engine: "sidechaincompress", threshold: Number(duckThreshold.toFixed(4)), ratio: 8, derivedFromDuckDb: duckDb } : false,
+        },
+        duck: duckApplied ? "applied — music ducked under per-scene voices (sidechaincompress)" : false,
+        note: perSceneFallbackNote ?? (sceneVoicesMissing ? `${sceneVoicesMissing} scene voice asset(s) missing on disk — skipped honestly` : null),
+      });
+    } else if (musicFile && voiceFile) {
       // music + voice: filter_complex — music chain → sidechaincompress(voice) → amix
-      await probeMedia(musicFile);
       await probeMedia(voiceFile);
       const musicProbe = await probeMedia(musicFile);
       const tStart = Math.min(edit.trimStartSec ?? 0, Math.max(0, musicProbe.durationSec - 0.5));
@@ -338,9 +483,45 @@ export async function runAssemblyJob(jobId: string) {
       Object.assign(editApplied, { music: false, note: "no soundtrack selected — final video is silent" });
     }
 
+    // ---- 4b: subtitle burn-in (§23) — extra video re-encode pass, only when enabled ----
+    // Honest degradation: if the burn-in pass fails, the assembly still ships WITHOUT
+    // subtitles and the failure reason is recorded in editApplied.subtitles.error.
+    const subsConfig = (projMeta.subtitles ?? null) as { trackId?: string; enabled?: boolean; burnIn?: boolean } | null;
+    if (subsConfig?.trackId && subsConfig.enabled !== false && subsConfig.burnIn) {
+      const track = await db.subtitleTrack.findFirst({ where: { id: subsConfig.trackId, userId: job.userId } });
+      if (!track) {
+        Object.assign(editApplied, { subtitles: { applied: false, error: "subtitle track no longer exists" } });
+      } else {
+        try {
+          const srtFile = path.join(tmp, "subs.srt");
+          await writeFile(srtFile, track.content, "utf8");
+          const esc = srtFile.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+          const burned = path.join(tmp, "burned.mp4");
+          await run("ffmpeg", [
+            "-y", "-i", finalFile,
+            "-vf",
+            `subtitles=${esc}:force_style='FontName=Noto Sans Armenian,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1,Shadow=0,MarginV=36,WrapStyle=0'`,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:a", "copy", "-movflags", "+faststart",
+            burned,
+          ], "subtitle burn-in");
+          finalFile = burned;
+          Object.assign(editApplied, {
+            subtitles: { applied: true, trackId: track.id, language: track.language, cueSource: "SRT" },
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message.slice(-300) : "burn-in failed";
+          Object.assign(editApplied, { subtitles: { applied: false, error: message } });
+        }
+      }
+    } else if (subsConfig?.trackId) {
+      Object.assign(editApplied, { subtitles: { applied: false, reason: "burn-in disabled — track available as sidecar export" } });
+    }
+
     const finalProbe = await probeMedia(finalFile);
     const buf = await readFile(finalFile);
-    const hasAudio = Boolean(musicFile || voiceFile);
+    const hasAudio = Boolean(musicFile || voiceFile || perSceneActive);
+    const subsApplied = (editApplied.subtitles as { applied?: boolean } | undefined)?.applied === true;
 
     // ---- 5: persist final asset + project state ----
     const asset = await saveAssetBuffer(project.userId, buf, "VIDEO", "video/mp4", `final_${project.title.slice(0, 40).replace(/\s+/g, "_")}_v${project.currentVersion}.mp4`, {
@@ -354,7 +535,7 @@ export async function runAssemblyJob(jobId: string) {
       editApplied,
     });
 
-    const nextMeta = { ...projMeta, soundtrack, assembly: { assembledAt: new Date().toISOString(), assetId: asset.id, scenesIncluded: ready.length, scenesSkipped: skipped, durationSec: Number(finalProbe.durationSec.toFixed(2)), hasAudio, hasVoice: Boolean(voiceFile), editApplied } };
+    const nextMeta = { ...projMeta, soundtrack, subtitles: subsConfig ?? null, assembly: { assembledAt: new Date().toISOString(), assetId: asset.id, scenesIncluded: ready.length, scenesSkipped: skipped, durationSec: Number(finalProbe.durationSec.toFixed(2)), hasAudio, hasVoice: Boolean(voiceFile) || perSceneActive, voiceMode: perSceneActive ? "perScene" : voiceFile ? "single" : null, subtitlesBurnedIn: subsApplied, editApplied } };
     const allDone = ready.length === project.scenes.length;
     await db.videoProject.update({
       where: { id: project.id },
@@ -367,17 +548,26 @@ export async function runAssemblyJob(jobId: string) {
 
     await jobs.markCompleted(
       jobId,
-      { assetId: asset.id, url: `/api/assets/${asset.id}/raw`, durationSec: Number(finalProbe.durationSec.toFixed(2)), scenesIncluded: ready.length, scenesSkipped: skipped, hasAudio, hasVoice: Boolean(voiceFile), ducked: duckApplied },
+      { assetId: asset.id, url: `/api/assets/${asset.id}/raw`, durationSec: Number(finalProbe.durationSec.toFixed(2)), scenesIncluded: ready.length, scenesSkipped: skipped, hasAudio, hasVoice: Boolean(voiceFile) || perSceneActive, voiceMode: perSceneActive ? "perScene" : voiceFile ? "single" : null, ducked: duckApplied, subtitlesBurnedIn: subsApplied },
       asset.id,
       0,
     );
+    const audioDesc = !hasAudio
+      ? "silent"
+      : perSceneActive
+        ? `per-scene voices ×${sceneVoiceFiles.length}${musicFile ? "+music" : ""}`
+        : musicFile && voiceFile
+          ? "music+voice mixed"
+          : voiceFile
+            ? "voice only"
+            : "soundtrack mixed";
     await audit.log({
       userId: job.userId,
       actorType: "SYSTEM",
       action: "video.assembled",
       objectType: "VideoProject",
       objectId: project.id,
-      summary: `${ready.length}/${project.scenes.length} scenes, ${finalProbe.durationSec.toFixed(1)}s, ${hasAudio ? (musicFile && voiceFile ? "music+voice mixed" : voiceFile ? "voice only" : "soundtrack mixed") : "silent"}${duckApplied ? ", ducked" : ""}, ${(buf.length / 1024 / 1024).toFixed(1)}MB`,
+      summary: `${ready.length}/${project.scenes.length} scenes, ${finalProbe.durationSec.toFixed(1)}s, ${audioDesc}${duckApplied ? ", ducked" : ""}${subsApplied ? ", subtitles burned" : ""}, ${(buf.length / 1024 / 1024).toFixed(1)}MB`,
     });
 
     return await db.generationJob.findUnique({ where: { id: jobId } });

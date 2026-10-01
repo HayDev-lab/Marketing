@@ -1,0 +1,965 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import { motion } from "framer-motion";
+     5→import { toast } from "sonner";
+     6→import { useI18n, api } from "@/lib/use-i18n";
+     7→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+     8→import { Badge } from "@/components/ui/badge";
+     9→import { Button } from "@/components/ui/button";
+    10→import { Input } from "@/components/ui/input";
+    11→import { Label } from "@/components/ui/label";
+    12→import { Skeleton } from "@/components/ui/skeleton";
+    13→import { Progress } from "@/components/ui/progress";
+    14→import { Switch } from "@/components/ui/switch";
+    15→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    16→import {
+    17→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    18→} from "@/components/ui/select";
+    19→import {
+    20→  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+    21→} from "@/components/ui/tooltip";
+    22→import {
+    23→  Settings2, Bot, ScrollText, Wallet, RefreshCw, Loader2, Activity,
+    24→  ShieldCheck, ShieldAlert, ShieldX, CircleHelp, Zap, Sparkles, CheckCircle2, TriangleAlert, ListChecks, Eye, Radar,
+    25→  CreditCard, Check, X,
+    26→} from "lucide-react";
+    27→
+    28→// ===== types =====
+    29→type ProviderStatus = "LIVE_VERIFIED" | "IMPLEMENTED_NOT_LIVE_VERIFIED" | "DEGRADED" | "DISABLED" | "BLOCKED_EXTERNAL";
+    30→
+    31→interface Provider {
+    32→  providerId: string; title: string; category: string; capabilities: string[];
+    33→  models: { id: string; title: string }[]; requiresExternalKey: boolean;
+    34→  supportsHealthCheck?: boolean; statusNote: string | null;
+    35→  enabled: boolean; status: ProviderStatus; defaultModel: string | null;
+    36→  lastHealthAt?: string | null; lastHealthOk?: boolean | null;
+    37→}
+    38→
+    39→interface Policy {
+    40→  enabled: boolean; trendDiscovery: boolean; autoPlanning: boolean; autoGeneration: boolean;
+    41→  paidGeneration: boolean; autoScheduling: boolean; autoPublishing: boolean; humanApproval: boolean;
+    42→  allowImageGeneration: boolean; allowVideoGeneration: boolean;
+    43→  platformsJson: string | null; languagesJson: string | null; forbiddenTopicsJson: string | null; forbiddenClaimsJson: string | null;
+    44→  marketsJson: string | null; keywordsJson: string | null;
+    45→  dailyBudget: number; weeklyBudget: number; monthlyBudget: number; maxGenerationCost: number;
+    46→  maxRetries: number; maxContentPerDay: number; minQualityThreshold: number;
+    47→  minimumRelevance: number; minimumConfidence: number; searchFrequencyHours: number; maxSignalsPerRun: number;
+    48→  maxAdaptPerRun: number;
+    49→}
+    50→
+    51→interface AuditLog {
+    52→  id: string; actorType: string; action: string; summary: string | null; createdAt: string;
+    53→}
+    54→
+    55→interface Usage {
+    56→  today: number; week: number; month: number; total: number;
+    57→  byProvider: { provider: string; cost: number }[];
+    58→  byCapability: { capability: string; cost: number }[];
+    59→}
+    60→
+    61→interface BrandLite { id: string; name: string }
+    62→
+    63→interface CycleResult {
+    64→  steps: string[]; contentItemId: string | null; trendAdapted: string | null;
+    65→  humanApprovalRequired: boolean; note: string;
+    66→}
+    67→
+    68→function parseArr(json: string | null | undefined): string[] {
+    69→  try { const v = JSON.parse(json ?? "[]"); return Array.isArray(v) ? v.map(String) : []; } catch { return []; }
+    70→}
+    71→
+    72→function statusBadge(status: ProviderStatus): { style?: React.CSSProperties; className?: string } {
+    73→  switch (status) {
+    74→    case "LIVE_VERIFIED":
+    75→      return { style: { background: "color-mix(in oklab, var(--neon-2) 16%, transparent)", color: "var(--neon-2)", borderColor: "color-mix(in oklab, var(--neon-2) 40%, transparent)" } };
+    76→    case "IMPLEMENTED_NOT_LIVE_VERIFIED":
+    77→      return { style: { background: "color-mix(in oklab, var(--neon-3) 16%, transparent)", color: "var(--neon-3)", borderColor: "color-mix(in oklab, var(--neon-3) 40%, transparent)" } };
+    78→    case "DEGRADED":
+    79→      return { className: "bg-destructive/15 text-destructive border-destructive/40" };
+    80→    default:
+    81→      return { className: "bg-muted/40 text-muted-foreground border-border" };
+    82→  }
+    83→}
+    84→
+    85→function statusIcon(status: ProviderStatus) {
+    86→  switch (status) {
+    87→    case "LIVE_VERIFIED": return <ShieldCheck className="h-3.5 w-3.5" aria-hidden />;
+    88→    case "IMPLEMENTED_NOT_LIVE_VERIFIED": return <ShieldAlert className="h-3.5 w-3.5" aria-hidden />;
+    89→    case "DEGRADED": return <ShieldX className="h-3.5 w-3.5" aria-hidden />;
+    90→    default: return <CircleHelp className="h-3.5 w-3.5" aria-hidden />;
+    91→  }
+    92→}
+    93→
+    94→const CATEGORY_ORDER = ["LLM", "Research", "Image", "Video", "TTS", "VoiceClone", "Music", "Avatar", "Transcription", "Publishing"];
+    95→const POLICY_BOOLEANS = ["enabled", "trendDiscovery", "autoPlanning", "autoGeneration", "paidGeneration", "autoScheduling", "autoPublishing", "humanApproval", "allowImageGeneration", "allowVideoGeneration", "trendSchedulerEnabled"] as const;
+    96→const PLATFORM_CHIPS = ["instagram", "tiktok", "facebook", "telegram"];
+    97→const LANG_CHIPS = ["hy", "ru", "en"];
+    98→const ACTOR_FILTERS = ["ALL", "WEB_UI", "MCP", "AUTOPILOT", "SYSTEM"] as const;
+    99→
+   100→// ===== main module =====
+   101→export function SettingsModule(_props: { onBrandsChanged?: () => void }) {
+   102→  const { t } = useI18n();
+   103→  return (
+   104→    <div className="grid gap-5">
+   105→      <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
+   106→        <h1 className="flex items-center gap-2 text-xl font-semibold sm:text-2xl">
+   107→          <Settings2 className="h-5 w-5 text-[var(--neon)]" aria-hidden /> {t("settings.title")}
+   108→        </h1>
+   109→        <p className="mt-1 text-sm text-muted-foreground">{t("settings.subtitle")}</p>
+   110→      </motion.section>
+   111→
+   112→      <Tabs defaultValue="providers" className="gap-4">
+   113→        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-muted/30 p-1">
+   114→          <TabsTrigger value="providers" className="min-h-11 gap-1.5 px-3"><Activity className="h-4 w-4" aria-hidden /> {t("settings.tab.providers")}</TabsTrigger>
+   115→          <TabsTrigger value="plan" className="min-h-11 gap-1.5 px-3"><CreditCard className="h-4 w-4" aria-hidden /> {t("settings.tab.plan")}</TabsTrigger>
+   116→          <TabsTrigger value="autopilot" className="min-h-11 gap-1.5 px-3"><Bot className="h-4 w-4" aria-hidden /> {t("settings.tab.autopilot")}</TabsTrigger>
+   117→          <TabsTrigger value="audit" className="min-h-11 gap-1.5 px-3"><ScrollText className="h-4 w-4" aria-hidden /> {t("settings.tab.audit")}</TabsTrigger>
+   118→          <TabsTrigger value="budget" className="min-h-11 gap-1.5 px-3"><Wallet className="h-4 w-4" aria-hidden /> {t("settings.tab.budget")}</TabsTrigger>
+   119→        </TabsList>
+   120→        <TabsContent value="providers"><ProvidersTab /></TabsContent>
+   121→        <TabsContent value="plan"><PlanTab /></TabsContent>
+   122→        <TabsContent value="autopilot"><AutopilotTab /></TabsContent>
+   123→        <TabsContent value="audit"><AuditTab /></TabsContent>
+   124→        <TabsContent value="budget"><BudgetTab /></TabsContent>
+   125→      </Tabs>
+   126→    </div>
+   127→  );
+   128→}
+   129→
+   130→// ===== Plan / Subscription tab (MASTER PROMPT §31) =====
+   131→interface ModalityPolicyDto {
+   132→  maxCostPerJob: number;
+   133→  allowedQualityTiers: string[];
+   134→  maxDurationSec?: number | null;
+   135→  monthlyCountCap: number | null;
+   136→  manualOverrideAllowed: boolean;
+   137→}
+   138→interface PlanConfigDto {
+   139→  id: string;
+   140→  monthlyCredits: number;
+   141→  maxConcurrentJobs: number;
+   142→  maxBrands: number;
+   143→  features: { autopilot: boolean; mcp: boolean; avatar: boolean; publishing: boolean; analytics: boolean; advancedTrends: boolean };
+   144→  policies: { image: ModalityPolicyDto; video: ModalityPolicyDto; tts: ModalityPolicyDto; transcription: ModalityPolicyDto; music: ModalityPolicyDto };
+   145→}
+   146→interface SubscriptionDto {
+   147→  subscription: { plan: string; status: string; billingCycle: string; startedAt: string; renewsAt: string | null };
+   148→  usage: {
+   149→    plan: string;
+   150→    credits: { used: number; total: number; remaining: number };
+   151→    runningJobs: number;
+   152→    monthlyCounts: { image: number; video: number; tts: number; transcription: number; music: number };
+   153→    brands: number;
+   154→    renewsAt: string | null;
+   155→  };
+   156→  plans: Record<string, PlanConfigDto>;
+   157→}
+   158→
+   159→const PLAN_FEATURE_KEYS: (keyof PlanConfigDto["features"])[] = ["autopilot", "mcp", "avatar", "publishing", "analytics", "advancedTrends"];
+   160→const PLAN_MODALITIES: { key: keyof PlanConfigDto["policies"]; i18n: string }[] = [
+   161→  { key: "image", i18n: "plan.modality.image" },
+   162→  { key: "video", i18n: "plan.modality.video" },
+   163→  { key: "tts", i18n: "plan.modality.tts" },
+   164→  { key: "transcription", i18n: "plan.modality.transcription" },
+   165→  { key: "music", i18n: "plan.modality.music" },
+   166→];
+   167→
+   168→function errMessage(e: unknown): string {
+   169→  return e instanceof Error ? e.message : String(e);
+   170→}
+   171→
+   172→function PlanTab() {
+   173→  const { t } = useI18n();
+   174→  const [data, setData] = useState<SubscriptionDto | null>(null);
+   175→  const [loading, setLoading] = useState(true);
+   176→  const [switching, setSwitching] = useState<string | null>(null);
+   177→
+   178→  const load = useCallback(async () => {
+   179→    setLoading(true);
+   180→    try {
+   181→      setData(await api<SubscriptionDto>("/api/subscription"));
+   182→    } catch (e) {
+   183→      toast.error(errMessage(e));
+   184→    } finally {
+   185→      setLoading(false);
+   186→    }
+   187→  }, []);
+   188→
+   189→  useEffect(() => {
+   190→    load();
+   191→  }, [load]);
+   192→
+   193→  const switchTo = async (plan: string) => {
+   194→    setSwitching(plan);
+   195→    try {
+   196→      await api("/api/subscription", { method: "POST", body: JSON.stringify({ action: "switch", plan }) });
+   197→      toast.success(t("plan.switched", { plan }));
+   198→      await load();
+   199→    } catch (e) {
+   200→      toast.error(errMessage(e));
+   201→    } finally {
+   202→      setSwitching(null);
+   203→    }
+   204→  };
+   205→
+   206→  if (loading && !data) {
+   207→    return (
+   208→      <div className="grid gap-4 sm:grid-cols-2">
+   209→        <Skeleton className="h-40 rounded-2xl bg-muted/40" />
+   210→        <Skeleton className="h-40 rounded-2xl bg-muted/40" />
+   211→      </div>
+   212→    );
+   213→  }
+   214→  if (!data) return null;
+   215→
+   216→  const { usage, plans } = data;
+   217→  const currentPlan = plans[usage.plan] ?? plans.FREE;
+   218→  const creditsPct = Math.min(100, usage.credits.total > 0 ? (usage.credits.used / usage.credits.total) * 100 : 0);
+   219→  const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
+   220→
+   221→  return (
+   222→    <div className="grid gap-4">
+   223→      {/* current usage */}
+   224→      <Card className="glass rounded-2xl">
+   225→        <CardHeader className="pb-2">
+   226→          <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
+   227→            <span className="flex items-center gap-2">
+   228→              <Zap className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("plan.creditsTitle")}
+   229→              <Badge variant="outline" className="border-[var(--neon)]/50 text-[var(--neon)]">{usage.plan}</Badge>
+   230→            </span>
+   231→            <span className="text-xs font-normal text-muted-foreground">{t("plan.renewsAt", { date: fmtDate(usage.renewsAt) })}</span>
+   232→          </CardTitle>
+   233→        </CardHeader>
+   234→        <CardContent className="grid gap-4">
+   235→          <div className="grid gap-2">
+   236→            <div className="flex items-baseline justify-between text-sm">
+   237→              <span className="font-medium">{usage.credits.used.toFixed(2)} / {usage.credits.total.toFixed(2)}</span>
+   238→              <span className="text-xs text-muted-foreground">{creditsPct.toFixed(0)}%</span>
+   239→            </div>
+   240→            <Progress value={creditsPct} aria-label={t("plan.creditsTitle")} className="h-2" />
+   241→          </div>
+   242→          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+   243→            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+   244→              <p className="text-muted-foreground">{t("plan.running", { n: usage.runningJobs, max: currentPlan.maxConcurrentJobs })}</p>
+   245→            </div>
+   246→            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+   247→              <p className="text-muted-foreground">{t("plan.brands", { n: usage.brands, max: currentPlan.maxBrands })}</p>
+   248→            </div>
+   249→            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+   250→              <p className="text-muted-foreground">{t("plan.maxVideo", { sec: currentPlan.policies.video.maxDurationSec ?? 60 })}</p>
+   251→            </div>
+   252→          </div>
+   253→          {/* per-modality monthly counters */}
+   254→          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+   255→            {PLAN_MODALITIES.map(({ key, i18n }) => {
+   256→              const cap = currentPlan.policies[key].monthlyCountCap;
+   257→              const used = usage.monthlyCounts[key as keyof SubscriptionDto["usage"]["monthlyCounts"]];
+   258→              return (
+   259→                <div key={key} className="rounded-lg border border-border/60 bg-muted/20 p-2.5 text-center">
+   260→                  <p className="text-[11px] text-muted-foreground">{t(i18n)}</p>
+   261→                  <p className="mt-0.5 text-sm font-medium">
+   262→                    {cap === null ? t("plan.unlimited") : t("plan.countOf", { n: used, cap })}
+   263→                  </p>
+   264→                </div>
+   265→              );
+   266→            })}
+   267→          </div>
+   268→        </CardContent>
+   269→      </Card>
+   270→
+   271→      {/* honest sandbox note */}
+   272→      <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200/90">
+   273→        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+   274→        <span>{t("plan.sandboxNote")}</span>
+   275→      </div>
+   276→
+   277→      {/* plan matrix */}
+   278→      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+   279→        {Object.values(plans).map((p) => {
+   280→          const isCurrent = p.id === usage.plan;
+   281→          return (
+   282→            <Card key={p.id} className={`glass rounded-2xl ${isCurrent ? "neon-border border-[var(--neon)]/40" : ""}`}>
+   283→              <CardHeader className="pb-2">
+   284→                <CardTitle className="flex items-center justify-between text-base">
+   285→                  {p.id}
+   286→                  {isCurrent && (
+   287→                    <Badge className="bg-[var(--neon)] text-black hover:bg-[var(--neon)]">{t("plan.currentBadge")}</Badge>
+   288→                  )}
+   289→                </CardTitle>
+   290→                <p className="text-xs text-muted-foreground">{t("plan.monthlyCredits", { n: p.monthlyCredits })}</p>
+   291→              </CardHeader>
+   292→              <CardContent className="grid gap-3 text-xs">
+   293→                <ul className="grid gap-1.5 text-muted-foreground">
+   294→                  <li>{t("plan.running", { n: 0, max: p.maxConcurrentJobs })}</li>
+   295→                  <li>{t("plan.brands", { n: 0, max: p.maxBrands })}</li>
+   296→                  <li>{t("plan.maxVideo", { sec: p.policies.video.maxDurationSec ?? 60 })}</li>
+   297→                  {PLAN_MODALITIES.slice(0, 2).map(({ key, i18n }) => (
+   298→                    <li key={key}>
+   299→                      {t(i18n)}: {p.policies[key].monthlyCountCap === null ? t("plan.unlimited") : t("plan.countOf", { n: 0, cap: p.policies[key].monthlyCountCap as number })}
+   300→                    </li>
+   301→                  ))}
+   302→                </ul>
+   303→                <div>
+   304→                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("plan.features")}</p>
+   305→                  <ul className="grid gap-1">
+   306→                    {PLAN_FEATURE_KEYS.map((f) => (
+   307→                      <li key={f} className={`flex items-center gap-1.5 ${p.features[f] ? "text-foreground" : "text-muted-foreground/50"}`}>
+   308→                        {p.features[f]
+   309→                          ? <Check className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />
+   310→                          : <X className="h-3.5 w-3.5" aria-hidden />}
+   311→                        {t(`plan.feature.${f}`)}
+   312→                      </li>
+   313→                    ))}
+   314→                  </ul>
+   315→                </div>
+   316→                <Button
+   317→                  size="sm"
+   318→                  variant={isCurrent ? "secondary" : "default"}
+   319→                  disabled={isCurrent || switching !== null}
+   320→                  onClick={() => switchTo(p.id)}
+   321→                  className="min-h-11"
+   322→                >
+   323→                  {switching === p.id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : isCurrent ? t("plan.currentBadge") : t("plan.switchBtn")}
+   324→                </Button>
+   325→              </CardContent>
+   326→            </Card>
+   327→          );
+   328→        })}
+   329→      </div>
+   330→    </div>
+   331→  );
+   332→}
+   333→
+   334→// ===== Providers tab =====
+   335→function ProvidersTab() {
+   336→  const { t } = useI18n();
+   337→  const [providers, setProviders] = useState<Provider[] | null>(null);
+   338→  const [checking, setChecking] = useState<string | null>(null);
+   339→
+   340→  const load = useCallback(async () => {
+   341→    try {
+   342→      setProviders(await api<Provider[]>("/api/settings/providers"));
+   343→    } catch {
+   344→      setProviders([]);
+   345→    }
+   346→  }, []);
+   347→
+   348→  useEffect(() => { load(); }, [load]);
+   349→
+   350→  const toggle = async (p: Provider, enabled: boolean) => {
+   351→    try {
+   352→      await api("/api/settings/providers", { method: "PATCH", body: JSON.stringify({ providerId: p.providerId, enabled }) });
+   353→      setProviders((prev) => (prev ?? []).map((x) => (x.providerId === p.providerId ? { ...x, enabled } : x)));
+   354→      toast.success(`${p.title}: ${enabled ? t("common.approve") : t("settings.status.DISABLED")}`);
+   355→    } catch (e) {
+   356→      // 423 BLOCKED_EXTERNAL — honest refusal, provider stays disabled
+   357→      toast.error(t("settings.blockedNote"), { description: (e as Error).message });
+   358→    }
+   359→  };
+   360→
+   361→  const healthCheck = async (p: Provider) => {
+   362→    setChecking(p.providerId);
+   363→    try {
+   364→      const res = await api<{ ok: boolean; latencyMs: number; reason: string | null; newStatus: ProviderStatus }>(
+   365→        "/api/settings/providers", { method: "POST", body: JSON.stringify({ providerId: p.providerId }) }
+   366→      );
+   367→      setProviders((prev) => (prev ?? []).map((x) => (x.providerId === p.providerId ? { ...x, status: res.newStatus, lastHealthAt: new Date().toISOString(), lastHealthOk: res.ok } : x)));
+   368→      if (res.ok) toast.success(t("settings.healthOk", { ms: res.latencyMs }));
+   369→      else toast.warning(t("settings.healthFail", { reason: res.reason ?? "unknown" }));
+   370→    } catch (e) {
+   371→      toast.error(t("settings.healthFail", { reason: (e as Error).message }));
+   372→    } finally {
+   373→      setChecking(null);
+   374→    }
+   375→  };
+   376→
+   377→  const grouped = useMemo(() => {
+   378→    const map = new Map<string, Provider[]>();
+   379→    for (const p of providers ?? []) {
+   380→      const arr = map.get(p.category) ?? [];
+   381→      arr.push(p);
+   382→      map.set(p.category, arr);
+   383→    }
+   384→    const cats = [...map.keys()].sort((a, b) => {
+   385→      const ia = CATEGORY_ORDER.indexOf(a), ib = CATEGORY_ORDER.indexOf(b);
+   386→      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+   387→    });
+   388→    return cats.map((c) => ({ category: c, providers: map.get(c) ?? [] }));
+   389→  }, [providers]);
+   390→
+   391→  return (
+   392→    <div className="grid gap-4">
+   393→      <div className="flex flex-wrap items-center justify-between gap-2">
+   394→        <p className="text-sm text-muted-foreground">{t("settings.providersDesc")}</p>
+   395→        <Button variant="outline" size="sm" className="min-h-11" onClick={load} aria-label={t("content.refresh")}>
+   396→          <RefreshCw className="h-4 w-4" aria-hidden />
+   397→        </Button>
+   398→      </div>
+   399→
+   400→      {!providers ? (
+   401→        <div className="grid gap-3">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl bg-muted/40" />)}</div>
+   402→      ) : (
+   403→        grouped.map(({ category, providers: list }) => (
+   404→          <Card key={category} className="glass rounded-2xl">
+   405→            <CardHeader className="pb-2">
+   406→              <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">{t(`settings.cat.${category}`)}</CardTitle>
+   407→            </CardHeader>
+   408→            <CardContent className="grid gap-2">
+   409→              {list.map((p) => {
+   410→                const accent = statusBadge(p.status);
+   411→                const row = (
+   412→                  <div key={p.providerId} className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/20 p-3 sm:flex-row sm:items-center">
+   413→                    <div className="min-w-0 flex-1">
+   414→                      <div className="flex flex-wrap items-center gap-2">
+   415→                        <p className="text-sm font-medium">{p.title}</p>
+   416→                        <TooltipProvider delayDuration={100}>
+   417→                          <Tooltip>
+   418→                            <TooltipTrigger asChild>
+   419→                              <Badge variant="outline" className={`cursor-help gap-1 text-[10px] ${accent.className ?? ""}`} style={accent.style}>
+   420→                                {statusIcon(p.status)} {t(`settings.status.${p.status}`)}
+   421→                              </Badge>
+   422→                            </TooltipTrigger>
+   423→                            {p.statusNote && (
+   424→                              <TooltipContent className="max-w-72 text-xs"><p>{p.statusNote}</p></TooltipContent>
+   425→                            )}
+   426→                          </Tooltip>
+   427→                        </TooltipProvider>
+   428→                      </div>
+   429→                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+   430→                        {p.providerId} · {t("settings.models", { n: p.models.length })}
+   431→                        {p.lastHealthAt ? ` · ${t("settings.lastHealth", { time: new Date(p.lastHealthAt).toLocaleString() })}` : ""}
+   432→                      </p>
+   433→                    </div>
+   434→                    <div className="flex shrink-0 items-center gap-3">
+   435→                      {p.status !== "BLOCKED_EXTERNAL" ? (
+   436→                        <div className="flex items-center gap-2">
+   437→                          <Switch
+   438→                            checked={p.enabled}
+   439→                            onCheckedChange={(v) => toggle(p, v)}
+   440→                            aria-label={`${p.title}: ${t("settings.status.DISABLED")} / ${t("common.approve")}`}
+   441→                          />
+   442→                          <Button size="sm" variant="outline" className="min-h-11" disabled={checking === p.providerId} onClick={() => healthCheck(p)}>
+   443→                            {checking === p.providerId ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Zap className="h-4 w-4 text-[var(--neon-3)]" aria-hidden />}
+   444→                            {checking === p.providerId ? t("settings.checking") : t("settings.healthCheck")}
+   445→                          </Button>
+   446→                        </div>
+   447→                      ) : (
+   448→                        <TooltipProvider delayDuration={100}>
+   449→                          <Tooltip>
+   450→                            <TooltipTrigger asChild>
+   451→                              <div className="flex cursor-not-allowed items-center gap-2 text-[11px] text-muted-foreground" aria-disabled>
+   452→                                <Switch checked={false} disabled aria-label={t("settings.blockedNote")} />
+   453→                                <TriangleAlert className="h-4 w-4 text-[var(--neon-3)]" aria-hidden />
+   454→                                <span className="hidden sm:inline">{t("settings.blockedNote")}</span>
+   455→                              </div>
+   456→                            </TooltipTrigger>
+   457→                            {p.statusNote && <TooltipContent className="max-w-72 text-xs"><p>{p.statusNote}</p></TooltipContent>}
+   458→                          </Tooltip>
+   459→                        </TooltipProvider>
+   460→                      )}
+   461→                    </div>
+   462→                  </div>
+   463→                );
+   464→                return row;
+   465→              })}
+   466→            </CardContent>
+   467→          </Card>
+   468→        ))
+   469→      )}
+   470→    </div>
+   471→  );
+   472→}
+   473→
+   474→// ===== Autopilot tab =====
+   475→function AutopilotTab() {
+   476→  const { t } = useI18n();
+   477→  const [policy, setPolicy] = useState<Policy | null>(null);
+   478→  const [cycles, setCycles] = useState<AuditLog[]>([]);
+   479→  const [platforms, setPlatforms] = useState<string[]>([]);
+   480→  const [languages, setLanguages] = useState<string[]>([]);
+   481→  const [forbiddenTopics, setForbiddenTopics] = useState("");
+   482→  const [forbiddenClaims, setForbiddenClaims] = useState("");
+   483→  const [markets, setMarkets] = useState("");
+   484→  const [keywords, setKeywords] = useState("");
+   485→  const [saving, setSaving] = useState(false);
+   486→  const [running, setRunning] = useState(false);
+   487→  const [trendRunning, setTrendRunning] = useState(false);
+   488→  const [brands, setBrands] = useState<BrandLite[]>([]);
+   489→  const [brandId, setBrandId] = useState("");
+   490→  const [result, setResult] = useState<CycleResult | null>(null);
+   491→
+   492→  const load = useCallback(async () => {
+   493→    try {
+   494→      const data = await api<{ policy: Policy; cycles: AuditLog[] }>("/api/autopilot");
+   495→      setPolicy(data.policy);
+   496→      setCycles(data.cycles);
+   497→      setPlatforms(parseArr(data.policy.platformsJson));
+   498→      setLanguages(parseArr(data.policy.languagesJson));
+   499→      setForbiddenTopics(parseArr(data.policy.forbiddenTopicsJson).join(", "));
+   500→      setForbiddenClaims(parseArr(data.policy.forbiddenClaimsJson).join(", "));
+   501→      setMarkets(parseArr(data.policy.marketsJson).join(", "));
+   502→      setKeywords(parseArr(data.policy.keywordsJson).join(", "));
+   503→    } catch {
+   504→      // honest empty state
+   505→    }
+   506→  }, []);
+   507→
+   508→  useEffect(() => { load(); }, [load]);
+   509→
+   510→  const loadBrands = useCallback(async () => {
+   511→    try {
+   512→      setBrands(await api<BrandLite[]>("/api/brands"));
+   513→    } catch {
+   514→      setBrands([]);
+   515→    }
+   516→  }, []);
+   517→
+   518→  useEffect(() => { loadBrands(); }, [loadBrands]);
+   519→
+   520→  const save = async () => {
+   521→    if (!policy) return;
+   522→    setSaving(true);
+   523→    try {
+   524→      const body: Record<string, unknown> = {
+   525→        platforms,
+   526→        languages,
+   527→        forbiddenTopics: forbiddenTopics.split(",").map((s) => s.trim()).filter(Boolean),
+   528→        forbiddenClaims: forbiddenClaims.split(",").map((s) => s.trim()).filter(Boolean),
+   529→        markets: markets.split(",").map((s) => s.trim()).filter(Boolean),
+   530→        keywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
+   531→      };
+   532→      for (const b of POLICY_BOOLEANS) body[b] = policy[b];
+   533→      body.dailyBudget = Number(policy.dailyBudget) || 0;
+   534→      body.weeklyBudget = Number(policy.weeklyBudget) || 0;
+   535→      body.monthlyBudget = Number(policy.monthlyBudget) || 0;
+   536→      body.maxGenerationCost = Number(policy.maxGenerationCost) || 0;
+   537→      body.maxRetries = Math.max(0, Math.floor(Number(policy.maxRetries) || 0));
+   538→      body.maxContentPerDay = Math.max(0, Math.floor(Number(policy.maxContentPerDay) || 0));
+   539→      body.minQualityThreshold = Math.min(1, Math.max(0, Number(policy.minQualityThreshold) || 0));
+   540→      body.minimumRelevance = Math.min(1, Math.max(0, Number(policy.minimumRelevance) || 0));
+   541→      body.minimumConfidence = Math.min(1, Math.max(0, Number(policy.minimumConfidence) || 0));
+   542→      body.searchFrequencyHours = Math.max(1, Math.floor(Number(policy.searchFrequencyHours) || 24));
+   543→      body.maxSignalsPerRun = Math.max(1, Math.floor(Number(policy.maxSignalsPerRun) || 5));
+   544→      body.maxAdaptPerRun = Math.max(0, Math.floor(Number(policy.maxAdaptPerRun) || 0));
+   545→      await api("/api/autopilot", { method: "PATCH", body: JSON.stringify(body) });
+   546→      toast.success(t("autopilot.saved"));
+   547→      await load();
+   548→    } catch (e) {
+   549→      toast.error(t("common.error"), { description: (e as Error).message });
+   550→    } finally {
+   551→      setSaving(false);
+   552→    }
+   553→  };
+   554→
+   555→  const runCycle = async () => {
+   556→    if (!brandId) {
+   557→      toast.warning(t("autopilot.brandRequired"));
+   558→      return;
+   559→    }
+   560→    setRunning(true);
+   561→    try {
+   562→      const res = await api<CycleResult>("/api/autopilot", { method: "POST", body: JSON.stringify({ brandId }) });
+   563→      setResult(res);
+   564→      await load();
+   565→    } catch (e) {
+   566→      const code = (e as { code?: string }).code;
+   567→      toast.error(code === "AUTOPILOT_DISABLED" ? t("autopilot.err.AUTOPILOT_DISABLED") : code === "BRAND_NOT_ALLOWED" ? t("autopilot.err.BRAND_NOT_ALLOWED") : t("autopilot.err.default"), { description: (e as Error).message });
+   568→    } finally {
+   569→      setRunning(false);
+   570→    }
+   571→  };
+   572→
+   573→  const runTrendSearch = async () => {
+   574→    setTrendRunning(true);
+   575→    try {
+   576→      const res = await api<{ jobId: string; deduplicated: boolean; policy: { topic: string; market: string } }>("/api/autopilot/trend-search", { method: "POST" });
+   577→      toast.success(res.deduplicated ? t("autopilot.trendDedup") : t("autopilot.trendStarted", { topic: res.policy.topic, market: res.policy.market }));
+   578→    } catch (e) {
+   579→      const code = (e as { code?: string }).code;
+   580→      toast.error(code ? t("autopilot.err.default") : t("autopilot.err.default"), { description: (e as Error).message });
+   581→    } finally {
+   582→      setTrendRunning(false);
+   583→    }
+   584→  };
+   585→
+   586→  const toggleChip = (list: string[], v: string, setter: (l: string[]) => void) => {
+   587→    setter(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+   588→  };
+   589→
+   590→  const numField = (id: string, label: string, value: number, onChange: (v: number) => void, step = "1") => (
+   591→    <div className="grid gap-1.5">
+   592→      <Label htmlFor={id} className="text-xs">{label}</Label>
+   593→      <Input id={id} type="number" min={0} step={step} className="min-h-11" value={value}
+   594→        onChange={(e) => onChange(Number(e.target.value))} />
+   595→    </div>
+   596→  );
+   597→
+   598→  if (!policy) {
+   599→    return <div className="grid gap-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl bg-muted/40" />)}</div>;
+   600→  }
+   601→
+   602→  return (
+   603→    <div className="grid gap-4">
+   604→      <Card className="glass rounded-2xl">
+   605→        <CardHeader className="pb-2">
+   606→          <CardTitle className="flex items-center gap-2 text-base">
+   607→            <Bot className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("autopilot.title")}
+   608→          </CardTitle>
+   609→          <p className="text-xs text-muted-foreground">{t("autopilot.desc")}</p>
+   610→        </CardHeader>
+   611→        <CardContent className="grid gap-4">
+   612→          {/* switches */}
+   613→          <div className="grid gap-3 sm:grid-cols-2">
+   614→            {POLICY_BOOLEANS.map((b) => (
+   615→              <div key={b} className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+   616→                <div className="min-w-0">
+   617→                  <Label htmlFor={`ap-${b}`} className="text-sm font-medium">{t(`autopilot.b.${b}`)}</Label>
+   618→                  <p className="mt-0.5 text-[11px] text-muted-foreground">{t(`autopilot.d.${b}`)}</p>
+   619→                </div>
+   620→                <Switch
+   621→                  id={`ap-${b}`}
+   622→                  checked={policy[b]}
+   623→                  onCheckedChange={(v) => setPolicy({ ...policy, [b]: v })}
+   624→                  className="mt-0.5 shrink-0"
+   625→                />
+   626→              </div>
+   627→            ))}
+   628→          </div>
+   629→
+   630→          {/* trend autopilot */}
+   631→          <section aria-label={t("autopilot.trendSection")} className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+   632→            <div className="flex flex-wrap items-center justify-between gap-2">
+   633→              <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("autopilot.trendSection")}</h3>
+   634→              <Button size="sm" variant="outline" className="min-h-11 gap-1.5" disabled={trendRunning} onClick={runTrendSearch} aria-label={t("autopilot.trendRunNow")}>
+   635→                {trendRunning ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Radar className="h-4 w-4 text-[var(--neon-2)]" aria-hidden />}
+   636→                {trendRunning ? t("autopilot.trendStarting") : t("autopilot.trendRunNow")}
+   637→              </Button>
+   638→            </div>
+   639→            <p className="text-[11px] text-muted-foreground">{t("autopilot.trendNote")}</p>
+   640→            <div className="grid gap-3 sm:grid-cols-2">
+   641→              <div className="grid gap-1.5">
+   642→                <Label htmlFor="ap-markets" className="text-xs">{t("autopilot.markets")}</Label>
+   643→                <Input id="ap-markets" className="min-h-11" value={markets} onChange={(e) => setMarkets(e.target.value)} placeholder="Armenia, Georgia" />
+   644→              </div>
+   645→              <div className="grid gap-1.5">
+   646→                <Label htmlFor="ap-keywords" className="text-xs">{t("autopilot.keywords")}</Label>
+   647→                <Input id="ap-keywords" className="min-h-11" value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="coffee, yerevan cafes" />
+   648→              </div>
+   649→            </div>
+   650→            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+   651→              {numField("ap-minrel", t("autopilot.minimumRelevance"), policy.minimumRelevance, (v) => setPolicy({ ...policy, minimumRelevance: v }), "0.05")}
+   652→              {numField("ap-minconf", t("autopilot.minimumConfidence"), policy.minimumConfidence, (v) => setPolicy({ ...policy, minimumConfidence: v }), "0.05")}
+   653→              {numField("ap-freq", t("autopilot.searchFrequency"), policy.searchFrequencyHours, (v) => setPolicy({ ...policy, searchFrequencyHours: v }))}
+   654→              {numField("ap-maxsig", t("autopilot.maxSignals"), policy.maxSignalsPerRun, (v) => setPolicy({ ...policy, maxSignalsPerRun: v }))}
+   655→              {numField("ap-maxadapt", t("autopilot.maxAdaptPerRun"), policy.maxAdaptPerRun, (v) => setPolicy({ ...policy, maxAdaptPerRun: v }))}
+   656→            </div>
+   657→            <p className="text-[11px] text-muted-foreground">{t("autopilot.chainNote")}</p>
+   658→          </section>
+   659→
+   660→          {/* budgets */}
+   661→          <section aria-label={t("autopilot.budgets")} className="grid gap-3">
+   662→            <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("autopilot.budgets")}</h3>
+   663→            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+   664→              {numField("ap-daily", t("autopilot.dailyBudget"), policy.dailyBudget, (v) => setPolicy({ ...policy, dailyBudget: v }), "0.5")}
+   665→              {numField("ap-weekly", t("autopilot.weeklyBudget"), policy.weeklyBudget, (v) => setPolicy({ ...policy, weeklyBudget: v }), "0.5")}
+   666→              {numField("ap-monthly", t("autopilot.monthlyBudget"), policy.monthlyBudget, (v) => setPolicy({ ...policy, monthlyBudget: v }), "0.5")}
+   667→              {numField("ap-maxgen", t("autopilot.maxGenerationCost"), policy.maxGenerationCost, (v) => setPolicy({ ...policy, maxGenerationCost: v }), "0.05")}
+   668→              {numField("ap-retries", t("autopilot.maxRetries"), policy.maxRetries, (v) => setPolicy({ ...policy, maxRetries: v }))}
+   669→              {numField("ap-maxday", t("autopilot.maxContentPerDay"), policy.maxContentPerDay, (v) => setPolicy({ ...policy, maxContentPerDay: v }))}
+   670→              {numField("ap-quality", t("autopilot.minQualityThreshold"), policy.minQualityThreshold, (v) => setPolicy({ ...policy, minQualityThreshold: v }), "0.05")}
+   671→            </div>
+   672→          </section>
+   673→
+   674→          {/* platforms + languages */}
+   675→          <div className="grid gap-3 sm:grid-cols-2">
+   676→            <section aria-label={t("autopilot.platforms")}>
+   677→              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("autopilot.platforms")}</h3>
+   678→              <div className="flex flex-wrap gap-2" role="group" aria-label={t("autopilot.platforms")}>
+   679→                {PLATFORM_CHIPS.map((p) => {
+   680→                  const active = platforms.includes(p);
+   681→                  return (
+   682→                    <button key={p} type="button" onClick={() => toggleChip(platforms, p, setPlatforms)} aria-pressed={active}
+   683→                      className={`min-h-11 rounded-full border px-4 text-xs font-medium transition ${active ? "neon-border text-foreground" : "border-border/60 text-muted-foreground glass-hover"}`}>
+   684→                      {p}
+   685→                    </button>
+   686→                  );
+   687→                })}
+   688→              </div>
+   689→            </section>
+   690→            <section aria-label={t("autopilot.languages")}>
+   691→              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("autopilot.languages")}</h3>
+   692→              <div className="flex flex-wrap gap-2" role="group" aria-label={t("autopilot.languages")}>
+   693→                {LANG_CHIPS.map((l) => {
+   694→                  const active = languages.includes(l);
+   695→                  return (
+   696→                    <button key={l} type="button" onClick={() => toggleChip(languages, l, setLanguages)} aria-pressed={active}
+   697→                      className={`min-h-11 rounded-full border px-4 text-xs font-medium transition ${active ? "neon-border text-foreground" : "border-border/60 text-muted-foreground glass-hover"}`}>
+   698→                      {t(`content.lang.${l}`)}
+   699→                    </button>
+   700→                  );
+   701→                })}
+   702→              </div>
+   703→            </section>
+   704→          </div>
+   705→
+   706→          {/* forbidden lists */}
+   707→          <div className="grid gap-3 sm:grid-cols-2">
+   708→            <div className="grid gap-1.5">
+   709→              <Label htmlFor="ap-topics" className="text-xs">{t("autopilot.forbiddenTopics")}</Label>
+   710→              <Input id="ap-topics" className="min-h-11" value={forbiddenTopics} onChange={(e) => setForbiddenTopics(e.target.value)} placeholder={t("autopilot.commaHint")} />
+   711→            </div>
+   712→            <div className="grid gap-1.5">
+   713→              <Label htmlFor="ap-claims" className="text-xs">{t("autopilot.forbiddenClaims")}</Label>
+   714→              <Input id="ap-claims" className="min-h-11" value={forbiddenClaims} onChange={(e) => setForbiddenClaims(e.target.value)} placeholder={t("autopilot.commaHint")} />
+   715→            </div>
+   716→          </div>
+   717→
+   718→          <Button className="min-h-11 w-full sm:w-auto sm:justify-self-end" disabled={saving} onClick={save}>
+   719→            {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+   720→            {t("autopilot.save")}
+   721→          </Button>
+   722→        </CardContent>
+   723→      </Card>
+   724→
+   725→      {/* supervised cycle */}
+   726→      <Card className="glass rounded-2xl">
+   727→        <CardHeader className="pb-2">
+   728→          <CardTitle className="flex items-center gap-2 text-base">
+   729→            <Sparkles className="h-4 w-4 text-[var(--neon-3)]" aria-hidden /> {t("autopilot.runCycle")}
+   730→          </CardTitle>
+   731→        </CardHeader>
+   732→        <CardContent className="grid gap-4">
+   733→          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+   734→            <div className="grid flex-1 gap-1.5">
+   735→              <Label className="text-xs">{t("autopilot.selectBrand")}</Label>
+   736→              <Select value={brandId} onValueChange={setBrandId}>
+   737→                <SelectTrigger className="min-h-11" aria-label={t("autopilot.selectBrand")}><SelectValue placeholder={t("autopilot.selectBrand")} /></SelectTrigger>
+   738→                <SelectContent>
+   739→                  {brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+   740→                </SelectContent>
+   741→              </Select>
+   742→            </div>
+   743→            <Button className="min-h-11" disabled={running} onClick={runCycle}>
+   744→              {running ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4" aria-hidden />}
+   745→              {running ? t("autopilot.running") : t("autopilot.runCycle")}
+   746→            </Button>
+   747→          </div>
+   748→
+   749→          {result && (
+   750→            <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4">
+   751→              <h3 className="text-sm font-medium">{t("autopilot.cycleResult")}</h3>
+   752→              <ol className="grid gap-2">
+   753→                {result.steps.map((s, i) => (
+   754→                  <li key={i} className="flex items-center gap-2 text-xs">
+   755→                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold" style={{ background: "color-mix(in oklab, var(--neon) 16%, transparent)", color: "var(--neon)" }}>
+   756→                      {i + 1}
+   757→                    </span>
+   758→                    <span className="font-mono">{s}</span>
+   759→                  </li>
+   760→                ))}
+   761→                {result.steps.length === 0 && <li className="text-xs text-muted-foreground">—</li>}
+   762→              </ol>
+   763→              {result.humanApprovalRequired ? (
+   764→                <p className="flex items-start gap-2 rounded-lg border border-[color-mix(in_oklab,var(--neon-2)_50%,transparent)] bg-[color-mix(in_oklab,var(--neon-2)_10%,transparent)] p-3 text-xs" role="status">
+   765→                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--neon-2)]" aria-hidden /> {t("autopilot.humanApprovalNote")}
+   766→                </p>
+   767→              ) : (
+   768→                <p className="flex items-start gap-2 rounded-lg border border-[color-mix(in_oklab,var(--neon-3)_50%,transparent)] bg-[color-mix(in_oklab,var(--neon-3)_10%,transparent)] p-3 text-xs" role="alert">
+   769→                  <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--neon-3)]" aria-hidden /> {t("autopilot.noApprovalNote")}
+   770→                </p>
+   771→              )}
+   772→            </div>
+   773→          )}
+   774→
+   775→          {/* recent cycles */}
+   776→          <section aria-label={t("autopilot.recentCycles")}>
+   777→            <h3 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+   778→              <ListChecks className="h-3.5 w-3.5" aria-hidden /> {t("autopilot.recentCycles")}
+   779→            </h3>
+   780→            {cycles.length === 0 ? (
+   781→              <p className="text-xs text-muted-foreground">{t("autopilot.noCycles")}</p>
+   782→            ) : (
+   783→              <ul className="max-h-44 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+   784→                {cycles.map((c) => (
+   785→                  <li key={c.id} className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs">
+   786→                    <div className="flex items-center justify-between gap-2">
+   787→                      <span className="font-mono">{c.action}</span>
+   788→                      <span className="text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</span>
+   789→                    </div>
+   790→                    {c.summary && <p className="mt-0.5 truncate text-muted-foreground">{c.summary}</p>}
+   791→                  </li>
+   792→                ))}
+   793→              </ul>
+   794→            )}
+   795→          </section>
+   796→        </CardContent>
+   797→      </Card>
+   798→    </div>
+   799→  );
+   800→}
+   801→
+   802→// ===== Audit tab =====
+   803→function AuditTab() {
+   804→  const { t } = useI18n();
+   805→  const [actor, setActor] = useState<(typeof ACTOR_FILTERS)[number]>("ALL");
+   806→  const [logs, setLogs] = useState<AuditLog[] | null>(null);
+   807→  const [reloadKey, setReloadKey] = useState(0);
+   808→
+   809→  useEffect(() => {
+   810→    let cancelled = false;
+   811→    const q = actor === "ALL" ? "" : `?actorType=${actor}`;
+   812→    api<AuditLog[]>(`/api/audit${q}`)
+   813→      .then((d) => { if (!cancelled) setLogs(d); })
+   814→      .catch(() => { if (!cancelled) setLogs([]); });
+   815→    return () => { cancelled = true; };
+   816→  }, [actor, reloadKey]);
+   817→
+   818→  return (
+   819→    <Card className="glass rounded-2xl">
+   820→      <CardHeader className="pb-2">
+   821→        <CardTitle className="flex items-center gap-2 text-base">
+   822→          <ScrollText className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("settings.audit.title")}
+   823→        </CardTitle>
+   824→        <p className="text-xs text-muted-foreground">{t("settings.audit.desc")}</p>
+   825→        <div className="flex flex-wrap gap-2 pt-1" role="group" aria-label={t("settings.audit.title")}>
+   826→          {ACTOR_FILTERS.map((f) => (
+   827→            <button key={f} type="button" onClick={() => { setActor(f); setLogs(null); }} aria-pressed={actor === f}
+   828→              className={`min-h-11 rounded-full border px-4 text-xs font-medium transition ${actor === f ? "neon-border text-foreground" : "border-border/60 text-muted-foreground glass-hover"}`}>
+   829→              {f === "ALL" ? t("common.all") : f}
+   830→            </button>
+   831→          ))}
+   832→        </div>
+   833→      </CardHeader>
+   834→      <CardContent className="max-h-96 overflow-y-auto scrollbar-thin">
+   835→        {logs === null ? (
+   836→          <div className="grid gap-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 rounded-xl bg-muted/40" />)}</div>
+   837→        ) : logs.length === 0 ? (
+   838→          <p className="py-6 text-center text-sm text-muted-foreground">{t("settings.audit.empty")}</p>
+   839→        ) : (
+   840→          <ul className="grid gap-2">
+   841→            {logs.map((l) => (
+   842→              <li key={l.id} className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
+   843→                <div className="flex flex-wrap items-center justify-between gap-2">
+   844→                  <div className="flex min-w-0 items-center gap-2">
+   845→                    <Badge variant="outline" className="shrink-0 text-[10px]">{l.actorType}</Badge>
+   846→                    <span className="truncate font-mono text-xs">{l.action}</span>
+   847→                  </div>
+   848→                  <span className="text-[11px] text-muted-foreground">{new Date(l.createdAt).toLocaleString()}</span>
+   849→                </div>
+   850→                {l.summary && <p className="mt-1 truncate text-xs text-muted-foreground">{l.summary}</p>}
+   851→              </li>
+   852→            ))}
+   853→          </ul>
+   854→        )}
+   855→      </CardContent>
+   856→    </Card>
+   857→  );
+   858→}
+   859→
+   860→// ===== Budget tab =====
+   861→function BudgetTab() {
+   862→  const { t } = useI18n();
+   863→  const [usage, setUsage] = useState<Usage | null>(null);
+   864→  const [limits, setLimits] = useState<{ dailyBudget: number; weeklyBudget: number; monthlyBudget: number } | null>(null);
+   865→  const [reloadKey, setReloadKey] = useState(0);
+   866→
+   867→  useEffect(() => {
+   868→    let cancelled = false;
+   869→    Promise.all([
+   870→      api<Usage>("/api/costs"),
+   871→      api<{ policy: Pick<Policy, "dailyBudget" | "weeklyBudget" | "monthlyBudget"> }>("/api/autopilot"),
+   872→    ])
+   873→      .then(([u, ap]) => { if (!cancelled) { setUsage(u); setLimits(ap.policy); } })
+   874→      .catch(() => { if (!cancelled) setUsage(null); });
+   875→    return () => { cancelled = true; };
+   876→  }, [reloadKey]);
+   877→
+   878→  if (!usage) {
+   879→    return <div className="grid gap-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl bg-muted/40" />)}</div>;
+   880→  }
+   881→
+   882→  const periods: { key: "today" | "week" | "month" | "total"; label: string; value: number; limit: number }[] = [
+   883→    { key: "today", label: t("settings.budget.today"), value: usage.today, limit: limits?.dailyBudget ?? 0 },
+   884→    { key: "week", label: t("settings.budget.week"), value: usage.week, limit: limits?.weeklyBudget ?? 0 },
+   885→    { key: "month", label: t("settings.budget.month"), value: usage.month, limit: limits?.monthlyBudget ?? 0 },
+   886→    { key: "total", label: t("settings.budget.total"), value: usage.total, limit: usage.total },
+   887→  ];
+   888→  const maxProvider = Math.max(0.0001, ...(usage.byProvider ?? []).map((p) => p.cost));
+   889→  const maxCapability = Math.max(0.0001, ...(usage.byCapability ?? []).map((p) => p.cost));
+   890→
+   891→  return (
+   892→    <div className="grid gap-4">
+   893→      <div className="flex flex-wrap items-center justify-between gap-2">
+   894→        <p className="text-sm text-muted-foreground">{t("settings.budget.desc")}</p>
+   895→        <Button variant="outline" size="sm" className="min-h-11" onClick={() => setReloadKey((k) => k + 1)} aria-label={t("content.refresh")}>
+   896→          <RefreshCw className="h-4 w-4" aria-hidden />
+   897→        </Button>
+   898→      </div>
+   899→
+   900→      {/* per-period bars */}
+   901→      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+   902→        {periods.map((p) => {
+   903→          const pct = p.limit > 0 ? Math.min(100, (p.value / p.limit) * 100) : 100;
+   904→          return (
+   905→            <Card key={p.key} className="glass rounded-2xl">
+   906→              <CardContent className="p-4">
+   907→                <p className="text-xs text-muted-foreground">{p.label}</p>
+   908→                <p className="mt-1 text-xl font-semibold tabular-nums neon-text">${p.value.toFixed(3)}</p>
+   909→                <Progress value={pct} className="mt-2 h-1.5" aria-label={`${p.label}: $${p.value.toFixed(3)}`} />
+   910→                {p.key !== "total" && (
+   911→                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+   912→                    {p.limit > 0 ? t("settings.budget.limitLabel", { v: p.limit.toFixed(2) }) : "—"}
+   913→                  </p>
+   914→                )}
+   915→              </CardContent>
+   916→            </Card>
+   917→          );
+   918→        })}
+   919→      </div>
+   920→
+   921→      {/* breakdowns */}
+   922→      {usage.total === 0 ? (
+   923→        <Card className="glass rounded-2xl"><CardContent className="p-6 text-center text-sm text-muted-foreground">{t("settings.budget.noUsage")}</CardContent></Card>
+   924→      ) : (
+   925→        <div className="grid gap-4 lg:grid-cols-2">
+   926→          <Card className="glass rounded-2xl">
+   927→            <CardHeader className="pb-2">
+   928→              <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">{t("settings.budget.byProvider")}</CardTitle>
+   929→            </CardHeader>
+   930→            <CardContent className="grid gap-3">
+   931→              {(usage.byProvider ?? []).map((p) => (
+   932→                <div key={p.provider}>
+   933→                  <div className="mb-1 flex justify-between text-xs">
+   934→                    <span className="font-mono">{p.provider}</span>
+   935→                    <span className="font-medium tabular-nums">${p.cost.toFixed(4)}</span>
+   936→                  </div>
+   937→                  <Progress value={(p.cost / maxProvider) * 100} className="h-1.5" aria-label={p.provider} />
+   938→                </div>
+   939→              ))}
+   940→            </CardContent>
+   941→          </Card>
+   942→          <Card className="glass rounded-2xl">
+   943→            <CardHeader className="pb-2">
+   944→              <CardTitle className="flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-muted-foreground">
+   945→                <Eye className="h-3.5 w-3.5" aria-hidden /> {t("settings.budget.byCapability")}
+   946→              </CardTitle>
+   947→            </CardHeader>
+   948→            <CardContent className="grid gap-3">
+   949→              {(usage.byCapability ?? []).map((p) => (
+   950→                <div key={p.capability}>
+   951→                  <div className="mb-1 flex justify-between text-xs">
+   952→                    <span className="font-mono">{p.capability}</span>
+   953→                    <span className="font-medium tabular-nums">${p.cost.toFixed(4)}</span>
+   954→                  </div>
+   955→                  <Progress value={(p.cost / maxCapability) * 100} className="h-1.5" aria-label={p.capability} />
+   956→                </div>
+   957→              ))}
+   958→            </CardContent>
+   959→          </Card>
+   960→        </div>
+   961→      )}
+   962→    </div>
+   963→  );
+   964→}
+   965→

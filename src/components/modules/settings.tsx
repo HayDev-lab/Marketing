@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useI18n, api } from "@/lib/use-i18n";
+import { useApp } from "@/lib/store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,8 +22,8 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Settings2, Bot, ScrollText, Wallet, RefreshCw, Loader2, Activity,
-  ShieldCheck, ShieldAlert, ShieldX, CircleHelp, Zap, Sparkles, CheckCircle2, TriangleAlert, ListChecks, Eye, Radar,
-  CreditCard, Check, X,
+  ShieldCheck, ShieldAlert, ShieldX, ShieldOff, CircleHelp, Zap, Sparkles, CheckCircle2, TriangleAlert, ListChecks, Eye, Radar,
+  CreditCard, Check, X, Plus,
 } from "lucide-react";
 
 // ===== types =====
@@ -100,6 +101,8 @@ const ACTOR_FILTERS = ["ALL", "WEB_UI", "MCP", "AUTOPILOT", "SYSTEM"] as const;
 // ===== main module =====
 export function SettingsModule(_props: { onBrandsChanged?: () => void }) {
   const { t } = useI18n();
+  // §30: the admin tab (trigger + content) exists only for platform admins
+  const isAdmin = useApp((s) => s.user)?.isAdmin === true;
   return (
     <div className="grid gap-5">
       <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass-strong neon-border rounded-2xl p-5 sm:p-6">
@@ -116,12 +119,16 @@ export function SettingsModule(_props: { onBrandsChanged?: () => void }) {
           <TabsTrigger value="autopilot" className="min-h-11 gap-1.5 px-3"><Bot className="h-4 w-4" aria-hidden /> {t("settings.tab.autopilot")}</TabsTrigger>
           <TabsTrigger value="audit" className="min-h-11 gap-1.5 px-3"><ScrollText className="h-4 w-4" aria-hidden /> {t("settings.tab.audit")}</TabsTrigger>
           <TabsTrigger value="budget" className="min-h-11 gap-1.5 px-3"><Wallet className="h-4 w-4" aria-hidden /> {t("settings.tab.budget")}</TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="admin" className="min-h-11 gap-1.5 px-3"><ShieldCheck className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("settings.tab.admin")}</TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value="providers"><ProvidersTab /></TabsContent>
         <TabsContent value="plan"><PlanTab /></TabsContent>
         <TabsContent value="autopilot"><AutopilotTab /></TabsContent>
         <TabsContent value="audit"><AuditTab /></TabsContent>
         <TabsContent value="budget"><BudgetTab /></TabsContent>
+        {isAdmin && <TabsContent value="admin"><AdminTab /></TabsContent>}
       </Tabs>
     </div>
   );
@@ -959,6 +966,303 @@ function BudgetTab() {
           </Card>
         </div>
       )}
+    </div>
+  );
+}
+
+// ===== Admin tab (MASTER PROMPT §30 — platform admins only) =====
+interface AdminStats {
+  counts: {
+    users: number; brands: number; contentItems: number; mediaAssets: number;
+    videoProjects: number; trends: number; promptTemplates: number; auditLogs: number;
+  };
+  jobs: { byStatus: { status: string; count: number }[]; byKind: { kind: string; count: number }[] };
+  cost: { total: number; thisMonth: number };
+  plans: { plan: string; count: number }[];
+}
+interface AdminUser {
+  id: string; email: string; name: string | null; isAdmin: boolean; createdAt: string; jobCount: number;
+}
+interface AdminData {
+  stats: AdminStats;
+  users: AdminUser[];
+  systemConfig: { switchDefaults: Record<string, boolean>; modelBlacklist: string[]; disabledProviders: string[] };
+}
+
+function AdminTab() {
+  const { t } = useI18n();
+  const selfEmail = useApp((s) => s.user)?.email?.toLowerCase() ?? "";
+  const [data, setData] = useState<AdminData | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [denied, setDenied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [newModel, setNewModel] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [d, ps] = await Promise.all([
+        api<AdminData>("/api/admin"),
+        api<Provider[]>("/api/settings/providers"),
+      ]);
+      setData(d);
+      setProviders(ps);
+      setDenied(false);
+    } catch (e) {
+      // honest inline panel for 403 (should not happen if isAdmin flag is correct)
+      if ((e as { code?: string }).code === "NOT_ADMIN") setDenied(true);
+      else toast.error(t("admin.err.load"), { description: errMessage(e) });
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const post = async (body: Record<string, unknown>) => {
+    setBusy(true);
+    try {
+      await api("/api/admin", { method: "POST", body: JSON.stringify(body) });
+      toast.success(t("admin.saved"));
+      await load();
+    } catch (e) {
+      toast.error(t("common.error"), { description: errMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleUserAdmin = (u: AdminUser) => {
+    const target = !u.isAdmin;
+    if (!window.confirm(t("admin.users.confirm", { email: u.email, role: target ? t("admin.users.promote") : t("admin.users.demote") }))) return;
+    void post({ action: "set_user_admin", email: u.email, isAdmin: target });
+  };
+
+  const allModelIds = useMemo(
+    () => [...new Set((providers ?? []).flatMap((p) => p.models.map((m) => m.id)))].sort(),
+    [providers]
+  );
+
+  if (denied) {
+    return (
+      <Card className="glass rounded-2xl">
+        <CardContent className="flex flex-col items-center gap-2 p-6 text-center">
+          <ShieldX className="h-6 w-6 text-destructive" aria-hidden />
+          <p className="text-sm font-medium">403 NOT_ADMIN</p>
+          <p className="text-xs text-muted-foreground">{t("admin.err.load")}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (loading && !data) {
+    return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[...Array(8)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl bg-muted/40" />)}</div>;
+  }
+  if (!data) return null;
+
+  const { stats, systemConfig } = data;
+  const jobsTotal = stats.jobs.byStatus.reduce((a, b) => a + b.count, 0);
+  const jobsRunning = stats.jobs.byStatus.find((x) => x.status === "PROCESSING")?.count ?? 0;
+  const jobsFailed = stats.jobs.byStatus.find((x) => x.status === "FAILED")?.count ?? 0;
+
+  const statCard = (label: string, value: string | number, hint?: string) => (
+    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold tabular-nums neon-text">{value}</p>
+      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+    </div>
+  );
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <ShieldCheck className="h-4 w-4 text-[var(--neon)]" aria-hidden /> {t("admin.title")}
+          </p>
+          <p className="text-xs text-muted-foreground">{t("admin.desc")}</p>
+        </div>
+        <Button variant="outline" size="sm" className="min-h-11" onClick={load} aria-label={t("content.refresh")} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
+        </Button>
+      </div>
+
+      {/* honest amber scope note */}
+      <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200/90">
+        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+        <span>{t("admin.note")}</span>
+      </div>
+
+      {/* platform stats — real counts from the API */}
+      <section aria-label={t("admin.title")} className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+        {statCard(t("admin.stats.users"), stats.counts.users)}
+        {statCard(t("admin.stats.brands"), stats.counts.brands)}
+        {statCard(t("admin.stats.content"), stats.counts.contentItems)}
+        {statCard(t("admin.stats.media"), stats.counts.mediaAssets)}
+        {statCard(t("admin.stats.videos"), stats.counts.videoProjects)}
+        {statCard(t("admin.stats.trends"), stats.counts.trends)}
+        {statCard(t("admin.stats.prompts"), stats.counts.promptTemplates)}
+        {statCard(t("admin.stats.audit"), stats.counts.auditLogs)}
+        {statCard(t("admin.stats.jobs"), jobsTotal, `${t("admin.stats.running")}: ${jobsRunning} · ${t("admin.stats.failed")}: ${jobsFailed}`)}
+        {statCard(t("admin.stats.spendTotal"), `$${stats.cost.total.toFixed(3)}`)}
+        {statCard(t("admin.stats.spendMonth"), `$${stats.cost.thisMonth.toFixed(3)}`)}
+        {statCard(t("admin.stats.plans"), stats.plans.reduce((a, b) => a + b.count, 0), stats.plans.map((p) => `${p.plan}: ${p.count}`).join(" · ") || "—")}
+      </section>
+
+      {/* users — admin role management (every change audited server-side) */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("admin.users.title")}</CardTitle>
+          <p className="text-xs text-muted-foreground">{t("admin.users.desc")}</p>
+        </CardHeader>
+        <CardContent>
+          {data.users.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">{t("admin.users.empty")}</p>
+          ) : (
+            <ul className="max-h-72 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+              {data.users.map((u) => {
+                const isSelf = u.email.toLowerCase() === selfEmail;
+                return (
+                  <li key={u.id} className="flex flex-col gap-2 rounded-xl border border-border/60 bg-muted/20 p-3 sm:flex-row sm:items-center">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-medium">{u.email}</p>
+                        {u.isAdmin && (
+                          <Badge variant="outline" className="gap-1 border-[var(--neon)]/50 text-[10px] text-[var(--neon)]">
+                            <ShieldCheck className="h-3 w-3" aria-hidden /> ADMIN
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                        {u.name ?? "—"} · {t("admin.users.jobs", { n: u.jobCount })} · {new Date(u.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={u.isAdmin ? "outline" : "secondary"}
+                      className="min-h-11 shrink-0 gap-1.5"
+                      disabled={busy || isSelf}
+                      title={isSelf ? t("admin.users.selfRow") : undefined}
+                      aria-label={u.isAdmin ? t("admin.users.demote") : t("admin.users.promote")}
+                      onClick={() => toggleUserAdmin(u)}
+                    >
+                      {u.isAdmin ? <ShieldOff className="h-4 w-4" aria-hidden /> : <ShieldCheck className="h-4 w-4 text-[var(--neon)]" aria-hidden />}
+                      {u.isAdmin ? t("admin.users.demote") : t("admin.users.promote")}
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* providers — platform defaults + platform-wide disable */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("admin.providers.title")}</CardTitle>
+          <p className="text-xs text-muted-foreground">{t("admin.providers.desc")}</p>
+        </CardHeader>
+        <CardContent className="grid gap-2">
+          {(providers ?? []).map((p) => {
+            const isBlocked = p.status === "BLOCKED_EXTERNAL";
+            const platformDefaultOn = systemConfig.switchDefaults[p.providerId] ?? !isBlocked;
+            const platformDisabled = systemConfig.disabledProviders.includes(p.providerId);
+            return (
+              <div key={p.providerId} className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/20 p-3 lg:flex-row lg:items-center">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{p.title}</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">{p.providerId} · {p.category}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Switch
+                      checked={platformDefaultOn}
+                      disabled={busy || isBlocked}
+                      onCheckedChange={(v) => void post({ action: "set_switch_defaults", providerId: p.providerId, enabled: v })}
+                      aria-label={`${p.title}: ${t("admin.providers.defaultOn")}`}
+                    />
+                    <span className={isBlocked ? "opacity-50" : ""}>{t("admin.providers.defaultOn")}</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Switch
+                      checked={platformDisabled}
+                      disabled={busy}
+                      onCheckedChange={(v) => {
+                        const next = v
+                          ? [...systemConfig.disabledProviders, p.providerId]
+                          : systemConfig.disabledProviders.filter((x) => x !== p.providerId);
+                        void post({ action: "set_disabled_providers", providerIds: next });
+                      }}
+                      aria-label={`${p.title}: ${t("admin.providers.disabledAll")}`}
+                    />
+                    <span>{t("admin.providers.disabledAll")}</span>
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      {/* model blacklist — chips editor */}
+      <Card className="glass rounded-2xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">{t("admin.blacklist.title")}</CardTitle>
+          <p className="text-xs text-muted-foreground">{t("admin.blacklist.desc")}</p>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Select value={newModel} onValueChange={setNewModel}>
+              <SelectTrigger className="min-h-11 w-full flex-1 whitespace-normal" aria-label={t("admin.blacklist.desc")}>
+                <SelectValue placeholder={t("admin.blacklist.desc")} />
+              </SelectTrigger>
+              <SelectContent className="max-h-64">
+                {allModelIds.map((id) => (
+                  <SelectItem key={id} value={id} disabled={systemConfig.modelBlacklist.includes(id)}>{id}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              className="min-h-11"
+              disabled={busy || !newModel || systemConfig.modelBlacklist.includes(newModel)}
+              onClick={() => {
+                void post({ action: "set_model_blacklist", models: [...systemConfig.modelBlacklist, newModel] });
+                setNewModel("");
+              }}
+            >
+              <Plus className="h-4 w-4" aria-hidden /> {t("admin.blacklist.add")}
+            </Button>
+          </div>
+          {systemConfig.modelBlacklist.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t("admin.blacklist.empty")}</p>
+          ) : (
+            <ul className="flex flex-wrap gap-2" aria-label={t("admin.blacklist.title")}>
+              {systemConfig.modelBlacklist.map((id) => (
+                <li key={id}>
+                  <span className="flex min-h-11 items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/10 px-3 py-1 font-mono text-xs text-destructive">
+                    {id}
+                    <button
+                      type="button"
+                      className="rounded-full p-1 transition hover:bg-destructive/20"
+                      aria-label={`${id}: remove`}
+                      disabled={busy}
+                      onClick={() => void post({ action: "set_model_blacklist", models: systemConfig.modelBlacklist.filter((x) => x !== id) })}
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="flex items-start gap-2 text-xs text-muted-foreground">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+            {t("admin.blacklist.note")}
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
