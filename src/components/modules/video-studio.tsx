@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api, assetUrl } from "@/lib/use-i18n";
+import { SceneTimeline, SceneAssets } from "@/components/signal-os/scene-timeline";
 import { VideoCanvas } from "@/components/signal-os/video-canvas";
 import { showStudioError } from "@/components/modules/image-studio";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -107,6 +108,7 @@ export function VideoStudioModule() {
 
   // create form
   const [title, setTitle] = useState("");
+  const [previewSelection, setPreviewSelection] = useState("final");
   const [durationSec, setDurationSec] = useState(30);
   const [aspect, setAspect] = useState("9:16");
   const [language, setLanguage] = useState("hy");
@@ -971,9 +973,9 @@ export function VideoStudioModule() {
         </>
       ) : project ? (
         <div className="video-editor-layout">
-          <VideoCanvas scenes={scenes} finalAssetId={project.finalAssetId} ratio={project.aspectRatio} />
+          <SceneAssets scenes={scenes} onSelect={setPreviewSelection}/><VideoCanvas scenes={scenes} finalAssetId={project.finalAssetId} ratio={project.aspectRatio} selection={previewSelection} onSelect={setPreviewSelection}/><SceneTimeline scenes={scenes} selected={previewSelection} onSelect={setPreviewSelection} voiceAssetId={voiceAssetId} cues={subCues}/>
           {/* script panel */}
-          <Card className="video-script glass-strong neon-border rounded-2xl">
+          <Card className="video-script video-script-expanded glass-strong neon-border rounded-2xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                 <BookOpen className="h-4 w-4 text-[var(--neon)]" /> {project.title}
@@ -1668,12 +1670,12 @@ export function VideoStudioModule() {
               { kind: "char" as const, title: t("studio.vid.charBible"), icon: User, neon: "var(--neon)", rows: charRows, setRows: setCharRows },
               { kind: "style" as const, title: t("studio.vid.styleBible"), icon: Palette, neon: "var(--neon-2)", rows: styleRows, setRows: setStyleRows },
             ]).map(({ kind, title, icon: Icon, neon, rows, setRows }) => (
-              <Card key={kind} className="glass rounded-2xl">
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
+              <details key={kind} className="glass rounded-2xl context-disclosure">
+                <summary>
+                  <span className="flex items-center gap-2 text-sm">
                     <Icon className="h-4 w-4" style={{ color: neon }} /> {title}
-                  </CardTitle>
-                </CardHeader>
+                  </span>
+                </summary>
                 <CardContent className="grid gap-3">
                   {rows.length === 0 ? (
                     <p className="text-xs text-muted-foreground">{t("studio.vid.bibleEmpty")}</p>
@@ -1712,7 +1714,7 @@ export function VideoStudioModule() {
                     </Button>
                   </div>
                 </CardContent>
-              </Card>
+              </details>
             ))}
           </div>
         </div>

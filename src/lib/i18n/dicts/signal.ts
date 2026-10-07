@@ -1,6 +1,17 @@
 import type { Dict, Locale } from "../index";
 export const signal: Record<Locale, Dict> = {
     en: {
+"signal.signInUp":"Sign in / Sign up",
+"signal.signInHelp":"Sign in from your profile to save projects, connect your business and run generation.",
+"signal.subtitleTrack":"Subtitles",
+"signal.cloud":"Cloud AI connections",
+"signal.cloudHelp":"API keys and model IDs are configured on the server. Configuration does not confirm a successful request.",
+"signal.configured":"Configured · not live verified",
+"signal.notConfigured":"Key or model missing",
+"signal.activeProvider":"Active for text generation",
+"signal.inactiveProvider":"Not selected",
+
+"signal.noReview":"No drafts are awaiting approval.",
 "signal.calendar":"Content calendar",
 "signal.month":"Month",
 "signal.week":"Week",
@@ -62,6 +73,17 @@ export const signal: Record<Locale, Dict> = {
         "signal.mode": "Operating mode"
     },
     ru: {
+"signal.signInUp":"Вход / Регистрация",
+"signal.signInHelp":"Войдите через профиль, чтобы сохранять проекты, подключить бизнес и запускать генерации.",
+"signal.subtitleTrack":"Субтитры",
+"signal.cloud":"Облачные AI-подключения",
+"signal.cloudHelp":"API-ключи и ID моделей задаются на сервере. Наличие настройки не подтверждает успешный запрос.",
+"signal.configured":"Настроено · live не проверен",
+"signal.notConfigured":"Не задан ключ или модель",
+"signal.activeProvider":"Активен для генерации текста",
+"signal.inactiveProvider":"Не выбран",
+
+"signal.noReview":"Нет черновиков, ожидающих согласования.",
 "signal.calendar":"Календарь контента",
 "signal.month":"Месяц",
 "signal.week":"Неделя",
@@ -123,6 +145,17 @@ export const signal: Record<Locale, Dict> = {
         "signal.mode": "Режим работы"
     },
     hy: {
+"signal.signInUp":"Մուտք / Գրանցում",
+"signal.signInHelp":"Մուտք գործեք պրոֆիլից՝ նախագծերը պահպանելու, բիզնեսը միացնելու և ստեղծումը գործարկելու համար։",
+"signal.subtitleTrack":"Ենթագրեր",
+"signal.cloud":"Ամպային AI միացումներ",
+"signal.cloudHelp":"API բանալիներն ու մոդելների ID-ները սահմանվում են սերվերում։ Կարգավորումը չի հաստատում հաջող հարցումը։",
+"signal.configured":"Կարգավորված է · իրական հարցումը չի ստուգվել",
+"signal.notConfigured":"Բանալին կամ մոդելը բացակայում է",
+"signal.activeProvider":"Ակտիվ է տեքստի ստեղծման համար",
+"signal.inactiveProvider":"Ընտրված չէ",
+
+"signal.noReview":"Հաստատման սպասող սևագրեր չկան։",
 "signal.calendar":"Բովանդակության օրացույց",
 "signal.month":"Ամիս",
 "signal.week":"Շաբաթ",

@@ -25,7 +25,7 @@ function readResetTokenFromUrl(): string | null {
   }
 }
 
-export function AuthView({ onAuthed }: { onAuthed: () => void }) {
+export function AuthView({ onAuthed, compact = false }: { onAuthed: () => void; compact?: boolean }) {
   const { t, locale, setLocale } = useI18n();
   const setLocaleStore = useApp((s) => s.setLocale);
   const [loading, setLoading] = useState(false);
@@ -202,7 +202,7 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
   };
 
   return (
-    <main className="relative min-h-screen overflow-hidden">
+    <div className={compact ? "auth-tab relative overflow-hidden" : "relative min-h-screen overflow-hidden"}>
       <div className="auth-static-core" aria-hidden="true" />
       <div className="grid-bg absolute inset-0" />
 
@@ -229,7 +229,7 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7 }}
-            className="max-w-xl text-center lg:text-left"
+            className={compact ? "hidden" : "max-w-xl text-center lg:text-left"}
           >
             <div className="mb-4 inline-flex items-center gap-2 rounded-full glass px-4 py-1.5 text-xs text-muted-foreground">
               <span className="h-2 w-2 rounded-full bg-[var(--neon-2)] status-dot text-[var(--neon-2)]" />
@@ -498,6 +498,6 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
           <span>{t("footer.rights")}</span>
         </footer>
       </div>
-    </main>
+    </div>
   );
 }

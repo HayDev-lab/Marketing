@@ -1,3 +1,4 @@
+import { cloudComplete } from "./cloud";
 // Z.AI cloud adapter — implements the unified contract against z-ai-web-dev-sdk.
 import ZAI from "z-ai-web-dev-sdk";
 import { writeFile, mkdir } from "fs/promises";
@@ -88,6 +89,9 @@ export async function llmComplete(opts: {
   json?: boolean;
   maxTokens?: number;
 }): Promise<string> {
+  const provider = process.env.LLM_PROVIDER ?? "zai";
+  if (provider === "openrouter" || provider === "google") return cloudComplete(provider, opts);
+  if (provider !== "zai") throw new Error("Unsupported LLM_PROVIDER server configuration");
   const zai = await getZai();
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [];
   if (opts.system) messages.push({ role: "system", content: opts.system });

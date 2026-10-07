@@ -3,10 +3,9 @@ import { useRef, useState } from "react";
 import { Maximize2, Scan, Film } from "lucide-react";
 import { assetUrl, useI18n } from "@/lib/use-i18n";
 interface PreviewScene { id: string; order: number; assetId?: string | null; status: string; durationSec: number }
-export function VideoCanvas({ scenes, finalAssetId, ratio }: { scenes: PreviewScene[]; finalAssetId?: string | null; ratio: string }) {
+export function VideoCanvas({ scenes, finalAssetId, ratio, selection, onSelect }: { scenes: PreviewScene[]; finalAssetId?: string | null; ratio: string; selection: string; onSelect:(id:string)=>void }) {
  const { t } = useI18n();
  const container = useRef<HTMLDivElement>(null);
- const [selection, setSelection] = useState("final");
  const [safeZones, setSafeZones] = useState(false);
  const [error, setError] = useState("");
  const selected = scenes.find(scene => scene.id === selection);
@@ -19,7 +18,7 @@ export function VideoCanvas({ scenes, finalAssetId, ratio }: { scenes: PreviewSc
     {safeZones && <div className="canvas-safe-zone" aria-hidden="true"/>}
    </div>
   </div>
-  <nav className="canvas-scenes" aria-label={t("studio.vid.scenes")}><button aria-pressed={selection === "final"} onClick={() => setSelection("final")}>{t("studio.vid.assembly.final")}</button>{scenes.map(scene => <button key={scene.id} aria-pressed={selection === scene.id} onClick={() => setSelection(scene.id)}>{t("studio.vid.scene", { n: scene.order + 1 })} <span>{t(`studio.vid.status.${scene.status}`)}</span></button>)}</nav>
+  <nav className="canvas-scenes" aria-label={t("studio.vid.scenes")}><button aria-pressed={selection === "final"} onClick={() => onSelect("final")}>{t("studio.vid.assembly.final")}</button>{scenes.map(scene => <button key={scene.id} aria-pressed={selection === scene.id} onClick={() => onSelect(scene.id)}>{t("studio.vid.scene", { n: scene.order + 1 })} <span>{t(`studio.vid.status.${scene.status}`)}</span></button>)}</nav>
   {error && <p className="os-error" role="alert">{error}</p>}
  </section>;
 }
