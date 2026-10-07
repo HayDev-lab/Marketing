@@ -1,263 +1,94 @@
 "use client";
-
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useApp, type ViewId } from "@/lib/store";
-import { useI18n, api, setStoredSessionToken } from "@/lib/use-i18n";
-import { SignalCore } from "@/components/signal-core";
-import { DashboardModule } from "@/components/modules/dashboard";
-import { BrandsModule } from "@/components/modules/brands";
-import { TrendsModule } from "@/components/modules/trends";
-import { PlannerModule } from "@/components/modules/planner";
-import { ContentModule } from "@/components/modules/content";
-import { PromptLibraryModule } from "@/components/modules/prompt-library";
-import { ImageStudioModule } from "@/components/modules/image-studio";
-import { VideoStudioModule } from "@/components/modules/video-studio";
-import { VoiceModule } from "@/components/modules/voice";
-import { AvatarStudioModule } from "@/components/modules/avatar-studio";
-import { MusicModule } from "@/components/modules/music-studio";
-import { PublishingModule } from "@/components/modules/publishing";
-import { AnalyticsModule } from "@/components/modules/analytics";
-import { SettingsModule } from "@/components/modules/settings";
-import { AdminModule } from "@/components/modules/admin";
-import { McpModule } from "@/components/modules/mcp";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  LayoutDashboard, Building2, Flame, CalendarRange, FileStack, Library,
-  ImageIcon, Clapperboard, AudioLines, ScanFace, Music4, Send, BarChart3, Settings, Plug, LogOut, Menu, X, Search, ShieldCheck,
-} from "lucide-react";
-import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n";
+import { api, useI18n, setStoredSessionToken } from "@/lib/use-i18n";
+import { Home, Plus, Radar, CalendarDays, Send, BarChart3, Settings, LogOut, Bot, Search } from "lucide-react";
+import { WorkspaceBoundary } from "@/components/signal-os/error-boundary";
+import { CREATIVE_VIEWS, CreateWorkspace } from "@/components/signal-os/workspace";
 import { CommandPalette, openCommandPalette } from "@/components/command-palette";
-import { OnboardingTour, openOnboardingTour } from "@/components/onboarding-tour";
 import { BatchWorkerChip } from "@/components/batch-worker-chip";
-import { LifeBuoy } from "lucide-react";
-import { cn } from "@/lib/utils";
-
-const NAV: { id: ViewId; icon: React.ComponentType<{ className?: string }>; key: string }[] = [
-  { id: "dashboard", icon: LayoutDashboard, key: "nav.dashboard" },
-  { id: "brands", icon: Building2, key: "nav.brands" },
-  { id: "trends", icon: Flame, key: "nav.trends" },
-  { id: "planner", icon: CalendarRange, key: "nav.planner" },
-  { id: "content", icon: FileStack, key: "nav.content" },
-  { id: "prompts", icon: Library, key: "nav.prompts" },
-  { id: "image", icon: ImageIcon, key: "nav.image" },
-  { id: "video", icon: Clapperboard, key: "nav.video" },
-  { id: "voice", icon: AudioLines, key: "nav.voice" },
-  { id: "avatar", icon: ScanFace, key: "nav.avatar" },
-  { id: "music", icon: Music4, key: "nav.music" },
-  { id: "publishing", icon: Send, key: "nav.publishing" },
-  { id: "analytics", icon: BarChart3, key: "nav.analytics" },
-  { id: "settings", icon: Settings, key: "nav.settings" },
-  { id: "admin", icon: ShieldCheck, key: "nav.admin" }, // §30 — rendered only for platform admins
-  { id: "mcp", icon: Plug, key: "nav.mcp" },
-];
-
-interface AppShellProps {
-  brands: { id: string; name: string; stage: string; website: string | null }[];
-  onBrandsChanged: () => void;
+import { OnboardingTour } from "@/components/onboarding-tour";
+const HomeScreen = dynamic(() => import("@/components/signal-os/home").then(m => m.SignalHome));
+const SettingsHub = dynamic(() => import("@/components/signal-os/settings-hub").then(m => m.SettingsHub));
+const Trends = dynamic(() => import("@/components/modules/trends").then(m => m.TrendsModule));
+const Planner = dynamic(() => import("@/components/signal-os/planner").then(m => m.PlannerWorkspace));
+const Publishing = dynamic(() => import("@/components/modules/publishing").then(m => m.PublishingModule));
+const Analytics = dynamic(() => import("@/components/modules/analytics").then(m => m.AnalyticsModule));
+const Prompts = dynamic(() => import("@/components/modules/prompt-library").then(m => m.PromptLibraryModule));
+const NAV = [{ id: "dashboard", icon: Home, key: "signal.home" }, { id: "create", icon: Plus, key: "signal.create" }, { id: "trends", icon: Radar, key: "nav.trends" }, { id: "planner", icon: CalendarDays, key: "nav.planner" }, { id: "publishing", icon: Send, key: "nav.publishing" }, { id: "analytics", icon: BarChart3, key: "nav.analytics" }, { id: "settings", icon: Settings, key: "nav.settings" }] as const;
+interface Job {
+    id: string;
+    status: string;
+    kind: string;
 }
-
-export function AppShell({ brands, onBrandsChanged }: AppShellProps) {
-  const { t, locale, setLocale } = useI18n();
-  const view = useApp((s) => s.view);
-  const setView = useApp((s) => s.setView);
-  const user = useApp((s) => s.user);
-  const mode = useApp((s) => s.mode);
-  const setMode = useApp((s) => s.setMode);
-  const coreState = useApp((s) => s.coreState);
-  const activeBrandId = useApp((s) => s.activeBrandId);
-  const setActiveBrand = useApp((s) => s.setActiveBrand);
-  const [navOpen, setNavOpen] = useState(false);
-
-  const logout = async () => {
-    await api("/api/auth", { method: "POST", body: JSON.stringify({ action: "logout" }) }).catch(() => {});
-    setStoredSessionToken(null);
-    window.location.reload();
-  };
-
-  const renderView = () => {
-    switch (view) {
-      case "dashboard": return <DashboardModule />;
-      case "brands": return <BrandsModule onBrandsChanged={onBrandsChanged} />;
-      case "trends": return <TrendsModule />;
-      case "planner": return <PlannerModule />;
-      case "content": return <ContentModule />;
-      case "prompts": return <PromptLibraryModule />;
-      case "image": return <ImageStudioModule />;
-      case "video": return <VideoStudioModule />;
-      case "voice": return <VoiceModule />;
-      case "avatar": return <AvatarStudioModule />;
-      case "music": return <MusicModule />;
-      case "publishing": return <PublishingModule />;
-      case "analytics": return <AnalyticsModule />;
-      case "settings": return <SettingsModule />;
-      case "admin": return <AdminModule />;
-      case "mcp": return <McpModule />;
-      default: return <DashboardModule />;
+export function AppShell({ brands, onBrandsChanged }: {
+    brands: {
+        id: string;
+        name: string;
+        stage: string;
+        website: string | null;
+    }[];
+    onBrandsChanged: () => void;
+}) {
+    const { t, locale } = useI18n();
+    const view = useApp(s => s.view);
+    const setView = useApp(s => s.setView);
+    const user = useApp(s => s.user);
+    const brand = useApp(s => s.activeBrandId);
+    const setBrand = useApp(s => s.setActiveBrand);
+    const mode = useApp(s => s.mode);
+    const setMode = useApp(s => s.setMode);
+    const [credits, setCredits] = useState<number | null>(null);
+    const [jobs, setJobs] = useState<Job[]>([]);
+    const [error, setError] = useState("");
+    const [busy, setBusy] = useState(false);
+    useEffect(() => { let alive = true; const load = async () => { try {
+        const [sub, feed, autopilot] = await Promise.all([api<{
+                usage: {
+                    credits: {
+                        remaining: number;
+                    };
+                };
+            }>("/api/subscription"), api<Job[]>("/api/jobs?limit=50"), api<{policy:{enabled:boolean}}>("/api/autopilot")]);
+        if (alive) {
+            setCredits(sub.usage.credits.remaining);
+            setJobs(feed);
+                setMode(autopilot.policy.enabled ? "autopilot" : "manual");
+        }
     }
-  };
-
-  return (
-    <div className="flex min-h-screen flex-col">
-      {/* ambient core background */}
-      <SignalCore className="fixed inset-0 -z-10 opacity-[0.28]" />
-
-      {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-border/70 bg-background/70 backdrop-blur-xl">
-        <div className="flex h-14 items-center gap-3 px-3 sm:px-5">
-          <button className="lg:hidden" onClick={() => setNavOpen(!navOpen)} aria-label="Toggle navigation" aria-expanded={navOpen}>
-            {navOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-          <div className="flex items-center gap-2" role="status" aria-label={`Core state: ${coreState}`}>
-            <span
-              className={cn("h-2.5 w-2.5 rounded-full status-dot transition-colors", {
-                "bg-[var(--neon)] text-[var(--neon)]": ["IDLE", "SUCCESS"].includes(coreState),
-                "bg-[var(--neon-2)] text-[var(--neon-2)]": ["ANALYZING", "PUBLISHING"].includes(coreState),
-                "bg-[var(--neon-3)] text-[var(--neon-3)]": coreState === "TREND_SEARCH",
-                "bg-fuchsia-400 text-fuchsia-400 animate-pulse-soft": ["GENERATING", "PLANNING"].includes(coreState),
-                "bg-destructive text-destructive": coreState === "ERROR",
-              })}
-            />
-            <span className="hidden text-xs font-medium tracking-wide text-muted-foreground sm:inline">{t(`state.${coreState}` as const)}</span>
-          </div>
-
-          <div className="mx-auto flex items-center gap-1.5 rounded-full glass px-1 py-1" role="radiogroup" aria-label="Mode" data-tour="mode">
-            {(["manual", "autopilot"] as const).map((m) => (
-              <button
-                key={m}
-                role="radio"
-                aria-checked={mode === m}
-                onClick={() => setMode(m)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium transition-all sm:px-4",
-                  mode === m ? "bg-[var(--neon)]/25 text-foreground neon-border" : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {m === "autopilot" ? "⚡ " : "✋ "}{t(`mode.${m}` as const)}
-              </button>
-            ))}
-          </div>
-
-          <button
-            onClick={openCommandPalette}
-            data-tour="palette"
-            className="hidden h-9 items-center gap-2 rounded-full glass px-3 text-xs text-muted-foreground transition-colors hover:text-foreground focus-glow md:inline-flex"
-            aria-label="Open command palette"
-          >
-            <Search className="h-3.5 w-3.5 text-[var(--neon)]" aria-hidden />
-            <span className="hidden lg:inline">{t("cmd.title")}</span>
-            <kbd className="rounded border border-border/80 bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">⌘K</kbd>
-          </button>
-          <div className="hidden items-center gap-2 md:flex" data-tour="brand">
-            <Select value={activeBrandId ?? ""} onValueChange={setActiveBrand}>
-              <SelectTrigger className="h-9 w-[170px] text-xs focus-glow" aria-label="Active brand">
-                <SelectValue placeholder={t("dash.noBrand")} />
-              </SelectTrigger>
-              <SelectContent>
-                {brands.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex items-center gap-1" role="group" aria-label="Language">
-              {LOCALES.map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLocale(l as Locale)}
-                  className={cn("rounded px-2 py-1 text-[11px] transition", locale === l ? "bg-[var(--neon)]/20 text-[var(--neon)]" : "text-muted-foreground hover:text-foreground")}
-                >
-                  {l.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label={t("auth.logout")} className="text-muted-foreground hover:text-foreground">
-            <LogOut className="h-4 w-4" />
-          </Button>
-        </div>
-      </header>
-
-      <div className="flex flex-1">
-        {/* Sidebar */}
-        <aside
-          className={cn(
-            "fixed inset-y-14 left-0 z-30 w-60 transform border-r border-border/70 bg-background/85 backdrop-blur-xl transition-transform lg:static lg:inset-auto lg:z-auto lg:translate-x-0 lg:bg-transparent",
-            navOpen ? "translate-x-0" : "-translate-x-full"
-          )}
-        >
-          <ScrollArea className="h-[calc(100vh-8rem)] lg:h-[calc(100vh-7rem)]">
-            <nav className="grid gap-1 p-3" aria-label="Main" data-tour="nav">
-              {NAV.filter((item) => item.id !== "admin" || user?.isAdmin === true).map(({ id, icon: Icon, key }) => (
-                <button
-                  key={id}
-                  onClick={() => {
-                    setView(id);
-                    setNavOpen(false);
-                  }}
-                  aria-current={view === id ? "page" : undefined}
-                  className={cn(
-                    "focus-glow flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all group/nav",
-                    view === id
-                      ? "glass text-foreground neon-border shadow-[0_0_20px_oklch(0.72_0.19_315/0.15)]"
-                      : "text-muted-foreground hover:bg-[var(--accent)] hover:text-foreground"
-                  )}
-                >
-                  <Icon className={cn("h-4 w-4 transition-transform group-hover/nav:scale-110", view === id && "text-[var(--neon)]")} />
-                  {t(key)}
-                </button>
-              ))}
-            </nav>
-            <div className="mx-3 mb-4 rounded-xl glass p-3">
-              <div className="mb-2 flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">{t("mode.autopilot")}</span>
-                <Switch checked={mode === "autopilot"} onCheckedChange={(v) => setMode(v ? "autopilot" : "manual")} aria-label="Autopilot mode" />
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {mode === "autopilot" ? "Policy-gated automation. Human approval enforced." : "Full manual control at every step."}
-              </p>
-            </div>
-          </ScrollArea>
-        </aside>
-
-        {navOpen && <div className="fixed inset-0 z-20 bg-black/50 lg:hidden" onClick={() => setNavOpen(false)} aria-hidden />}
-
-        {/* Main content */}
-        <main className="min-w-0 flex-1 px-3 py-4 sm:px-6 sm:py-6">
-          <div className="mx-auto max-w-7xl">{renderView()}</div>
-        </main>
-      </div>
-
-      {/* Sticky footer */}
-      <footer className="mt-auto border-t border-border/70 bg-background/70 backdrop-blur-xl">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-[11px] text-muted-foreground sm:px-6">
-          <span className="flex items-center gap-3">
-            <span>© {new Date().getFullYear()} ՀայDev Marketing — {t("app.tagline")}</span>
-            <button
-              onClick={openOnboardingTour}
-              className="focus-glow inline-flex items-center gap-1 rounded-full px-2 py-1 transition hover:bg-muted hover:text-foreground"
-              aria-label={t("tour.replay")}
-            >
-              <LifeBuoy className="h-3 w-3" aria-hidden />
-              {t("tour.replay")}
-            </button>
-          </span>
-          <span className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-[var(--neon-2)] status-dot text-[var(--neon-2)]" />AI Core: cloud</span>
-            <span className="hidden sm:inline">{user?.email}</span>
-          </span>
-        </div>
-      </footer>
-
-      {/* Global command palette (⌘K / Ctrl+K, G-to-jump) */}
-      <CommandPalette />
-
-      {/* Background batch worker: polls the job feed, auto-resumes CONTENT_BATCH jobs on any view */}
-      <BatchWorkerChip />
-
-      {/* First-visit onboarding tour (replayable from footer) */}
-      <OnboardingTour />
-    </div>
-  );
+    catch (e) {
+        if (alive)
+            setError((e as Error).message);
+    } }; void load(); const timer = setInterval(load, 15000); return () => { alive = false; clearInterval(timer); }; }, [brand, setMode]);
+    useEffect(() => { document.documentElement.lang = locale; }, [locale]);
+    const changeMode = async (next: "manual" | "autopilot") => { setBusy(true); setError(""); try {
+        await api("/api/autopilot", { method: "PATCH", body: JSON.stringify({ enabled: next === "autopilot" }) });
+        setMode(next);
+        if (next === "autopilot")
+            setView("autopilot");
+    }
+    catch (e) {
+        setError((e as Error).message);
+    }
+    finally {
+        setBusy(false);
+    } };
+    const active = jobs.filter(j => ["QUEUED", "PROCESSING", "RUNNING", "WAITING_PROVIDER", "RETRYING"].includes(j.status));
+    const current = CREATIVE_VIEWS.includes(view) ? "create" : ["brands", "mcp", "admin", "assets"].includes(view) ? "settings" : view;
+    return <div className="signal-os"><a className="skip-link" href="#workspace">{t("signal.skip")}</a><aside className="os-dock"><button className="os-mark" onClick={() => setView("dashboard")} aria-label={t("signal.home")}>H</button><nav data-tour="nav" aria-label={t("signal.tools")}>{NAV.map(({ id, icon: Icon, key }) => <button key={id} title={t(key)} aria-label={t(key)} aria-current={current === id ? "page" : undefined} onClick={() => setView(id)}><Icon size={21}/><span>{t(key)}</span></button>)}</nav><button title={t("signal.operator")} aria-label={t("signal.operator")} onClick={() => setView("autopilot")}><Bot size={21}/></button></aside>
+ <div className="os-body"><header className="os-topbar"><select data-tour="brand" aria-label={t("nav.brands")} value={brand ?? ""} onChange={e => e.target.value === "__new" ? setView("brands") : setBrand(e.target.value)}><option value="">{t("dash.noBrand")}</option>{brands.map(b => <option value={b.id} key={b.id}>{b.name}</option>)}<option value="__new">+ {t("nav.brands")}</option></select>
+ <div className="mode-switch" data-tour="mode" role="group" aria-label={t("signal.mode")}>{(["manual", "autopilot"] as const).map(m => <button disabled={busy} aria-pressed={mode === m} key={m} onClick={() => void changeMode(m)}>{t(`mode.${m}`)}</button>)}</div>
+ <button className="credit-button" onClick={() => setView("settings")} aria-label={t("signal.credits")}>{credits === null ? "—" : new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(credits)} <span>{t("signal.credits")}</span></button>
+ <button className="jobs-button" aria-live="polite" onClick={() => setView("autopilot")}><span className="live-dot"/>{active.length} <span>{t("signal.jobs")}</span></button><button className="top-icon" onClick={openCommandPalette} aria-label={t("cmd.title")}><Search size={18}/></button><button className="profile-button" aria-label={t("signal.account")} title={user?.email} onClick={() => setView("settings")}>{(user?.name ?? user?.email ?? "H").slice(0, 1).toUpperCase()}</button><button className="top-icon" aria-label={t("auth.logout")} onClick={async () => { try {
+        await api("/api/auth", { method: "POST", body: JSON.stringify({ action: "logout" }) });
+        setStoredSessionToken(null);
+        window.location.reload();
+    }
+    catch (e) {
+        setError((e as Error).message);
+    } }}><LogOut size={17}/></button></header>
+ {error && <div className="os-error" role="alert">{error}</div>}
+ <main id="workspace" tabIndex={-1} className="os-main"><WorkspaceBoundary key={view}>{CREATIVE_VIEWS.includes(view) ? <CreateWorkspace /> : view === "dashboard" ? <HomeScreen /> : view === "trends" ? <Trends /> : view === "planner" ? <Planner /> : view === "publishing" ? <Publishing /> : view === "analytics" ? <Analytics /> : view === "prompts" ? <Prompts /> : <SettingsHub key={view} onBrandsChanged={onBrandsChanged} initialView={view}/>}</WorkspaceBoundary></main>
+ </div><CommandPalette /><BatchWorkerChip /><OnboardingTour /></div>;
 }

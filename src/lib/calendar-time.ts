@@ -1,0 +1,4 @@
+function zonedParts(date:Date,zone:string){const parts=new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(date);return Object.fromEntries(parts.map(p=>[p.type,p.value]));}
+export function dayKey(date:Date,zone:string){const p=zonedParts(date,zone);return `${p.year}-${p.month}-${p.day}`;}
+export function localStamp(date:Date,zone:string){const p=zonedParts(date,zone);return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;}
+export function toUTC(stamp:string,zone:string){const [y,m,d,h,min]=stamp.split(/[-T:]/).map(Number);const wanted=Date.UTC(y,m-1,d,h,min);let result=wanted;for(let i=0;i<3;i++){const p=zonedParts(new Date(result),zone);const observed=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute);result+=wanted-observed;}if(localStamp(new Date(result),zone)!==stamp)throw new Error("DST_INVALID");return new Date(result).toISOString();}

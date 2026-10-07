@@ -59,3 +59,8 @@ db/*.db-journal
 
 # tool/QA runtime artifacts
 tool-results/
+
+# Local development database and generated agent notices
+/prisma/dev.db*
+/AGENTS.md
+/CLAUDE.md

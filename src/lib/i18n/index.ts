@@ -1,3 +1,4 @@
+import { signal } from "./dicts/signal";
 import { core } from "./dicts/core";
 import { brands } from "./dicts/brands";
 import { trends } from "./dicts/trends";
@@ -17,7 +18,7 @@ export const LOCALES: Locale[] = ["hy", "ru", "en"];
 export const LOCALE_LABELS: Record<Locale, string> = { hy: "Հայերեն", ru: "Русский", en: "English" };
 export type Dict = Record<string, string>;
 
-const MODULES: Record<Locale, Dict>[] = [core, brands, trends, planner, studio, analytics, publishing, settings, mcp, autopilot, music, avatar, admin];
+const MODULES: Record<Locale, Dict>[] = [signal, core, brands, trends, planner, studio, analytics, publishing, settings, mcp, autopilot, music, avatar, admin];
 
 export const DICTIONARIES: Record<Locale, Dict> = {
   hy: Object.assign({}, ...MODULES.map((m) => m.hy)),

@@ -4,8 +4,9 @@ import { useEffect, useState, useCallback } from "react";
 import { useApp, type SessionUser, type ViewId } from "@/lib/store";
 import { api } from "@/lib/use-i18n";
 import { AuthView } from "@/components/auth-view";
-import { AppShell } from "@/components/app-shell";
-import { SignalCore } from "@/components/signal-core";
+import dynamic from "next/dynamic";
+const AppShell = dynamic(() => import("@/components/app-shell").then(m => m.AppShell));
+
 import { Loader2 } from "lucide-react";
 
 interface MeResponse {
@@ -27,7 +28,7 @@ export default function Home() {
       // PWA app-shortcut deep link: /?view=image|content|analytics…
       const paramView = new URLSearchParams(window.location.search).get("view");
       if (paramView) {
-        const valid: ViewId[] = ["dashboard", "brands", "trends", "planner", "content", "prompts", "image", "video", "voice", "publishing", "analytics", "settings", "mcp"];
+        const valid: ViewId[] = ["create", "autopilot", "assets", "dashboard", "brands", "trends", "planner", "content", "prompts", "image", "video", "voice", "publishing", "analytics", "settings", "mcp"];
         if (valid.includes(paramView as ViewId)) useApp.getState().setView(paramView as ViewId);
       }
       const data = await api<MeResponse>("/api/auth/me");
@@ -64,7 +65,7 @@ export default function Home() {
   if (booting) {
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden">
-        <SignalCore className="absolute inset-0" />
+
         <div className="glass relative z-10 flex items-center gap-3 rounded-2xl px-8 py-6">
           <Loader2 className="h-5 w-5 animate-spin text-[var(--neon)]" />
           <span className="text-sm tracking-wide text-foreground/80">ՀայDev Marketing — booting core…</span>

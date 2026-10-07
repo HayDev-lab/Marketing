@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useApp } from "@/lib/store";
+import { useApp, type CoreState } from "@/lib/store";
 
 /**
  * MARKETING SIGNAL CORE — WebGL thematic heart of ՀայDev Marketing.
@@ -18,9 +18,9 @@ uniform vec2 u_res;
 uniform float u_time;
 uniform float u_state; // 0 idle 1 analyzing 2 trend 3 planning 4 generating 5 publishing 6 success 7 error
 
-vec3 neonViolet = vec3(0.78, 0.30, 0.95);
-vec3 neonMint   = vec3(0.35, 0.95, 0.70);
-vec3 neonAmber  = vec3(0.98, 0.75, 0.30);
+vec3 neonViolet = vec3(0.545, 0.361, 0.965);
+vec3 neonMint   = vec3(0.133, 0.827, 0.933);
+vec3 neonAmber  = vec3(0.133, 0.827, 0.933);
 vec3 neonRed    = vec3(0.98, 0.30, 0.30);
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -90,20 +90,25 @@ function compile(gl: WebGLRenderingContext, type: number, src: string) {
   return sh;
 }
 
-export function SignalCore({ className }: { className?: string }) {
+export function SignalCore({ className, state }: { className?: string; state?: CoreState }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
   const coreState = useApp((s) => s.coreState);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || window.matchMedia("(max-width: 767px)").matches) return;
     const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "low-power" });
     if (!gl) return; // graceful degradation: parent shows static gradient
 
     const prog = gl.createProgram()!;
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+    const vertex = compile(gl, gl.VERTEX_SHADER, VERT);
+    const fragment = compile(gl, gl.FRAGMENT_SHADER, FRAG);
+    gl.attachShader(prog, vertex);
+    gl.attachShader(prog, fragment);
     gl.linkProgram(prog);
     gl.useProgram(prog);
 
@@ -120,6 +125,8 @@ export function SignalCore({ className }: { className?: string }) {
 
     const stateMap: Record<string, number> = {
       IDLE: 0,
+      WAITING_APPROVAL: 3,
+      AUTOPILOT_ACTIVE: 5,
       ANALYZING: 1,
       TREND_SEARCH: 2,
       PLANNING: 3,
@@ -148,12 +155,12 @@ export function SignalCore({ className }: { className?: string }) {
       if (!running) return;
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, (now - start) / 1000);
-      gl.uniform1f(uState, stateMap[useApp.getState().coreState] ?? 0);
+      gl.uniform1f(uState, stateMap[stateRef.current ?? useApp.getState().coreState] ?? 0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       if (!reduced) raf = requestAnimationFrame(draw);
     };
 
-    gl.uniform1f(uState, stateMap[useApp.getState().coreState] ?? 0);
+    gl.uniform1f(uState, stateMap[stateRef.current ?? useApp.getState().coreState] ?? 0);
     draw(start);
     if (reduced) {
       // draw one static frame reacting to state changes at low rate
@@ -180,6 +187,11 @@ export function SignalCore({ className }: { className?: string }) {
       cancelAnimationFrame(raf);
       ro.disconnect();
       document.removeEventListener("visibilitychange", onVis);
+      gl.deleteBuffer(buf);
+      gl.deleteShader(vertex);
+      gl.deleteShader(fragment);
+      gl.deleteProgram(prog);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
     };
   }, []);
 
@@ -187,7 +199,7 @@ export function SignalCore({ className }: { className?: string }) {
     <div className={`relative overflow-hidden ${className ?? ""}`} aria-hidden="true">
       {/* static fallback under the canvas */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,oklch(0.4_0.12_315/0.5),oklch(0.13_0.012_300)_70%)]" />
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      <div className="signal-static-orb"/><canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
     </div>
   );
 }

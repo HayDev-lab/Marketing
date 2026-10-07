@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useApp } from "@/lib/store";
 import { useI18n, api, setStoredSessionToken } from "@/lib/use-i18n";
-import { SignalCore } from "@/components/signal-core";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -203,7 +203,7 @@ export function AuthView({ onAuthed }: { onAuthed: () => void }) {
 
   return (
     <main className="relative min-h-screen overflow-hidden">
-      <SignalCore className="absolute inset-0 opacity-80" />
+      <div className="auth-static-core" aria-hidden="true" />
       <div className="grid-bg absolute inset-0" />
 
       <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6">
