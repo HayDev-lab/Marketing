@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useApp, type SessionUser, type ViewId } from "@/lib/store";
 import { api } from "@/lib/use-i18n";
-import { AuthView } from "@/components/auth-view";
 import dynamic from "next/dynamic";
 const AppShell = dynamic(() => import("@/components/app-shell").then(m => m.AppShell));
 
@@ -19,7 +18,6 @@ export default function Home() {
   const [booting, setBooting] = useState(true);
   const [brands, setBrands] = useState<{ id: string; name: string; stage: string; website: string | null }[]>([]);
   const setUser = useApp((s) => s.setUser);
-  const user = useApp((s) => s.user);
   const setActiveBrand = useApp((s) => s.setActiveBrand);
   const setMode = useApp((s) => s.setMode);
 
@@ -33,6 +31,7 @@ export default function Home() {
       }
       const data = await api<MeResponse>("/api/auth/me");
       setUser(data.user);
+      if (!data.user) {setActiveBrand(null);setMode("manual");if (!paramView) useApp.getState().setView("dashboard");}
       if (data.brands) {
         setBrands(data.brands);
         const { activeBrandId: current } = useApp.getState();
@@ -54,10 +53,11 @@ export default function Home() {
   }, [setActiveBrand, setMode, setUser]);
 
   useEffect(() => {
-    bootstrap();
+    void Promise.resolve().then(bootstrap);
   }, [bootstrap]);
 
   const handleAuthed = () => {
+    useApp.getState().setView("dashboard");
     setBooting(true);
     bootstrap();
   };
@@ -74,9 +74,5 @@ export default function Home() {
     );
   }
 
-  if (!user) {
-    return <AuthView onAuthed={handleAuthed} />;
-  }
-
-  return <AppShell brands={brands} onBrandsChanged={() => bootstrap()} />;
+  return <AppShell brands={brands} onBrandsChanged={() => bootstrap()} onRequestAuth={() => useApp.getState().setView("auth")} onAuthed={handleAuthed} />;
 }

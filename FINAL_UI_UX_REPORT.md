@@ -87,3 +87,6 @@ Home now renders an owner-scoped media shelf, a real draft awaiting review, navi
 Server-only OpenRouter and Google Gemini text adapters are available with blank API/model slots in `.env.example`. Settings reports configuration without claiming live success. See CLOUD_API_SETUP.md. TTS/video/image integrations are not implied by a text API key.
 
 Final status remains BLOCKED pending real browser visual comparison, live external provider verification and the previously documented Golden Path gaps. No claim of pixel-perfect or production completion.
+
+## Direct workspace entry
+Anonymous visitors now enter Home without a login landing page. Sign in / Sign up is an explicit workspace tab with the existing authentication forms. Guest Home and Create expose empty, navigable UI without querying private data or dispatching jobs. Authenticated workflows retain owner checks and budgets. No anonymous owner account or automatic demo login is introduced. The public deployment must be rebuilt from this commit before the change can be verified there.

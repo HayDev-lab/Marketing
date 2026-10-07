@@ -21,6 +21,7 @@ interface Job {
 export function SignalHome() {
     const { t, locale } = useI18n();
     const setView = useApp(s => s.setView);
+    const user = useApp(s => s.user);
     const core = useApp(s => s.coreState);
     const mode = useApp(s => s.mode);
     const brand = useApp(s => s.activeBrandId);
@@ -31,7 +32,7 @@ export function SignalHome() {
     const [jobs, setJobs] = useState<Job[]>([]);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
-    const load = useCallback(async () => { setError(""); try {
+    const load = useCallback(async () => { if (!user) {setLoading(false); return;} setError(""); try {
         const [content, feed] = await Promise.all([api<Content[]>(`/api/content${brand ? `?brandId=${encodeURIComponent(brand)}` : ""}`), api<Job[]>("/api/jobs?limit=6")]);
         setItems(content.slice(0, 5));
         setJobs(feed);
@@ -41,11 +42,11 @@ export function SignalHome() {
     }
     finally {
         setLoading(false);
-    } }, [brand]);
+    } }, [brand, user]);
     useEffect(() => { void Promise.resolve().then(load); const timer = setInterval(load, 15000); return () => clearInterval(timer); }, [load]);
     const open = async () => { if (opening)
         return; setOpening(true); try {
-        if (format === "content" && brief.trim()) {
+        if (user && format === "content" && brief.trim()) {
             if (!brand) {
                 setView("brands");
                 return;

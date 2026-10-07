@@ -5,6 +5,7 @@ import { persist } from "zustand/middleware";
 import type { Locale } from "@/lib/i18n";
 
 export type ViewId =
+  | "auth"
   | "create"
   | "autopilot"
   | "assets"
