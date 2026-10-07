@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, handle, ApiError, requireUser, parseJson } from "@/lib/api";
+import { getSubscription, isPlanId, PLANS } from "@/lib/subscription";
 import { audit, ledger } from "@/lib/ledger";
 import { llmCompleteJson, webSearch } from "@/lib/ai/zai";
 
@@ -26,6 +27,11 @@ export async function PATCH(req: NextRequest) {
   return handle(async () => {
     const user = await requireUser();
     const body = await req.json();
+    if (body.enabled === true) {
+      const subscription = await getSubscription(user.id);
+      const plan = isPlanId(subscription.plan) ? subscription.plan : "FREE";
+      if (!PLANS[plan].features.autopilot) throw new ApiError(402, "AUTOPILOT_PLAN_REQUIRED", "Autopilot requires a plan that includes automation.");
+    }
     await db.autopilotPolicy.upsert({ where: { userId: user.id }, create: { userId: user.id }, update: {} });
     const data: Record<string, unknown> = {};
     for (const k of BOOL_KEYS) if (typeof body[k] === "boolean") data[k] = body[k];
@@ -65,11 +71,16 @@ export async function POST(req: NextRequest) {
     if (allowedBrands.length && !allowedBrands.includes(brandId)) {
       throw new ApiError(423, "BRAND_NOT_ALLOWED", "This brand is not in the Autopilot allowed list");
     }
+    const assertRunning = async () => {
+      const current = await db.autopilotPolicy.findUnique({ where: { userId: user.id } });
+      if (!current?.enabled) throw new ApiError(423, "AUTOPILOT_STOPPED", "Autopilot was stopped before the next action.");
+    };
     const steps: string[] = [];
 
     // 1. Trend discovery (if allowed)
     let trendCandidate: { title: string; platform: string; adaptation: string } | null = null;
     if (policy.trendDiscovery) {
+      await assertRunning();
       steps.push("trend_search");
       const search = await webSearch({ query: `${brand.industry ?? "marketing"} trend Armenia this week`, num: 5, recencyDays: 7 });
       const pick = (search ?? [])[0];
@@ -79,6 +90,7 @@ export async function POST(req: NextRequest) {
     // 2. Planning (if allowed)
     let concept: { hook: string; caption: string; hashtags: string[] } | null = null;
     if (policy.autoPlanning) {
+      await assertRunning();
       steps.push("planning");
       concept = await llmCompleteJson<{ hook: string; caption: string; hashtags: string[] }>({
         system: `You are the Autopilot planner. Work ONLY within user policy. Forbidden topics: ${policy.forbiddenTopicsJson}. Forbidden claims: ${policy.forbiddenClaimsJson}. Never invent prices/reviews/awards.`,
@@ -112,13 +124,14 @@ Create ONE content concept. Return JSON {"hook": str, "caption": str, "hashtags"
 
     // 4. Automatic generation (paid) — only if explicitly allowed
     if (policy.autoGeneration && policy.paidGeneration) {
+      await assertRunning();
       steps.push("generation");
       await ledger.assertBudget(user.id, 0.02);
       // generation happens via same core endpoint logic; autopilot creates the prompt
       const prompt = `${concept?.hook ?? brand.name} promotional image for ${brand.name}, premium social media style, ${brand.profile?.tone ?? "clean modern"} aesthetic`;
       const res = await fetch(new URL("/api/generate/image", req.url), {
         method: "POST",
-        headers: { cookie: req.headers.get("cookie") ?? "", "content-type": "application/json" },
+        headers: { cookie: req.headers.get("cookie") ?? "", "x-session-token": req.headers.get("x-session-token") ?? "", "content-type": "application/json" },
         body: JSON.stringify({ prompt, brandId: brand.id, aspectRatio: "1:1" }),
       });
       const resJson = await res.json();

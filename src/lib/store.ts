@@ -5,6 +5,9 @@ import { persist } from "zustand/middleware";
 import type { Locale } from "@/lib/i18n";
 
 export type ViewId =
+  | "create"
+  | "autopilot"
+  | "assets"
   | "dashboard"
   | "brands"
   | "trends"
@@ -24,6 +27,8 @@ export type ViewId =
 
 // Marketing Signal Core states — the WebGL heart reacts to these
 export type CoreState =
+  | "WAITING_APPROVAL"
+  | "AUTOPILOT_ACTIVE"
   | "IDLE"
   | "ANALYZING"
   | "TREND_SEARCH"

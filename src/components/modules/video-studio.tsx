@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useApp, pulseCore } from "@/lib/store";
 import { useI18n, api, assetUrl } from "@/lib/use-i18n";
+import { VideoCanvas } from "@/components/signal-os/video-canvas";
 import { showStudioError } from "@/components/modules/image-studio";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -969,9 +970,10 @@ export function VideoStudioModule() {
           </Card>
         </>
       ) : project ? (
-        <>
+        <div className="video-editor-layout">
+          <VideoCanvas scenes={scenes} finalAssetId={project.finalAssetId} ratio={project.aspectRatio} />
           {/* script panel */}
-          <Card className="glass-strong neon-border rounded-2xl">
+          <Card className="video-script glass-strong neon-border rounded-2xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                 <BookOpen className="h-4 w-4 text-[var(--neon)]" /> {project.title}
@@ -998,7 +1000,7 @@ export function VideoStudioModule() {
           </Card>
 
           {/* timeline summary bar */}
-          <div className="glass rounded-2xl p-4">
+          <div className="video-summary glass rounded-2xl p-4" aria-live="polite">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-[var(--neon-2)]" />
@@ -1025,7 +1027,7 @@ export function VideoStudioModule() {
           </div>
 
           {/* scenes strip */}
-          <Card className="glass rounded-2xl">
+          <Card className="video-scenes-panel glass rounded-2xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Clapperboard className="h-4 w-4 text-[var(--neon-3)]" /> {t("studio.vid.scenes")}
@@ -1217,7 +1219,7 @@ export function VideoStudioModule() {
           </Card>
 
           {/* final assembly */}
-          <Card className="glass-strong neon-border rounded-2xl">
+          <Card className="video-assembly glass-strong neon-border rounded-2xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                 <FileVideo className="h-4 w-4 text-[var(--neon)]" /> {t("studio.vid.assembly.title")}
@@ -1661,7 +1663,7 @@ export function VideoStudioModule() {
           </Card>
 
           {/* bibles */}
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="video-properties grid gap-5">
             {([
               { kind: "char" as const, title: t("studio.vid.charBible"), icon: User, neon: "var(--neon)", rows: charRows, setRows: setCharRows },
               { kind: "style" as const, title: t("studio.vid.styleBible"), icon: Palette, neon: "var(--neon-2)", rows: styleRows, setRows: setStyleRows },
@@ -1713,7 +1715,7 @@ export function VideoStudioModule() {
               </Card>
             ))}
           </div>
-        </>
+        </div>
       ) : (
         <Skeleton className="h-64 rounded-2xl bg-muted/40" />
       )}
