@@ -1629,3 +1629,10 @@ select option{
 @keyframes signal-h-float{0%,100%{transform:perspective(500px) rotateY(-15deg) rotateX(7deg) translateY(0)}50%{transform:perspective(500px) rotateY(10deg) rotateX(3deg) translateY(-3px)}}
 .signal-paused :is(.signal-orbits i,.electric-monogram,.electric-current path),.signal-paused:before,.signal-paused .signal-static-orb:before,.signal-paused .signal-static-orb:after{animation-play-state:paused!important}
 @media(max-width:767px),(prefers-reduced-motion:reduce){.signal-orbits i,.electric-monogram,.core-stage:before,.signal-static-orb:before,.signal-static-orb:after{animation:none!important;will-change:auto}}
+
+/* Rotate the sphere independently of the fixed central monogram. */
+.core-visual{animation:signal-sphere-spin 42s linear infinite;will-change:transform}
+.electric-monogram{animation:none;transform:perspective(500px) rotateY(-15deg) rotateX(7deg)}
+@keyframes signal-sphere-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.signal-paused .core-visual{animation-play-state:paused!important}
+@media(max-width:767px),(prefers-reduced-motion:reduce){.core-visual{animation:none!important;will-change:auto}}

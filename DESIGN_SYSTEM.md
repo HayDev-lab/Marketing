@@ -11,3 +11,5 @@ Focus outline 2px #A78BFA, skip link to workspace, named icon buttons, aria-curr
 All workspace cards and buttons use `rgba(17,23,34,0.8)`: 20% transparency. Text opacity stays at 100%; 18px backdrop blur and inset highlights provide glass depth. Primary, active and destructive glass surfaces retain semantic tints. The core uses brighter cyan/violet atmospheric glow. Its H has layered depth, a metallic gradient face and clipped SVG electric currents with a slow continuous dash animation; reduced-motion disables that animation. No rapid flashing is used.
 
 The live core adds three independently rotating orbits (48/62/78 seconds), orbiting light nodes, drifting stars, a breathing atmosphere and gently floating H. CSS motion also works without WebGL. All motion pauses when the document is hidden; mobile and reduced-motion keep a static reduced visual.
+
+The sphere itself rotates once every 42 seconds independently of its orbits. The central H remains fixed, with only its electric currents animated. Hidden-tab pause and mobile/reduced-motion guards also apply to sphere rotation.
