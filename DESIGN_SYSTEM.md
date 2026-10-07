@@ -13,3 +13,5 @@ All workspace cards and buttons use `rgba(17,23,34,0.8)`: 20% transparency. Text
 The live core adds three independently rotating orbits (48/62/78 seconds), orbiting light nodes, drifting stars, a breathing atmosphere and gently floating H. CSS motion also works without WebGL. All motion pauses when the document is hidden; mobile and reduced-motion keep a static reduced visual.
 
 The sphere itself rotates once every 42 seconds independently of its orbits. The central H remains fixed, with only its electric currents animated. Hidden-tab pause and mobile/reduced-motion guards also apply to sphere rotation.
+
+WebGL now renders the sphere and three projected 3D orbital planes in one shader. Rear arcs and particles are occluded by the sphere, front arcs pass over it, and luminous particles follow each orbit. CSS rings are hidden only after successful shader initialization. H remains outside the canvas.

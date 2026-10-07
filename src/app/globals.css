@@ -1636,3 +1636,7 @@ select option{
 @keyframes signal-sphere-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .signal-paused .core-visual{animation-play-state:paused!important}
 @media(max-width:767px),(prefers-reduced-motion:reduce){.core-visual{animation:none!important;will-change:auto}}
+
+/* WebGL renders both sphere and depth-aware orbits; CSS stays as fallback. */
+.core-stage:has(.signal-gl-ready) .signal-orbits{visibility:hidden}
+.core-visual:has(.signal-gl-ready){animation:none;transform:none;will-change:auto}

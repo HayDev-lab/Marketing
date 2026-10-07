@@ -19,10 +19,30 @@ uniform float u_time;
 uniform float u_state;
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+// Project tilted 3D orbital planes, with rear arcs occluded by the sphere.
+vec4 orbit(vec2 p,float radius,float tilt,float phase,vec3 tint){
+ float turn=phase+u_time*.035;
+ mat2 rot=mat2(cos(turn),-sin(turn),sin(turn),cos(turn));
+ vec2 q=rot*p;
+ float flatten=mix(.30,.55,.5+.5*sin(u_time*.025+phase));
+ vec2 plane=vec2(q.x,q.y/flatten);
+ float distanceToRing=abs(length(plane)-radius)*flatten;
+ float depth=q.y*sin(tilt)/flatten;
+ float visible=(length(p)<.365 && depth<0.0)?0.0:1.0;
+ float line=exp(-distanceToRing*650.0)*.8+exp(-distanceToRing*110.0)*.22;
+ float angle=u_time*(.32+phase*.035)+phase;
+ vec2 node=vec2(cos(angle),sin(angle)*flatten)*radius;
+ float nodeDepth=node.y*sin(tilt)/flatten;
+ float nodeVisible=(length(node)<.365 && nodeDepth<0.0)?0.0:1.0;
+ float d=length(q-node);
+ float light=(exp(-d*240.0)*1.8+exp(-d*80.0)*.6)*nodeVisible;
+ float intensity=line*visible+light;
+ return vec4(tint*intensity,clamp(intensity,0.0,1.0));
+}
 void main(){
  vec2 p=(gl_FragCoord.xy-.5*u_res)/min(u_res.x,u_res.y);
  float r=length(p),radius=.365;
- float active=step(.5,u_state),speed=mix(.025,.055,active);
+ float active=step(.5,u_state),speed=mix(.12,.18,active);
  vec3 cyan=vec3(.08,.66,1.0),violet=vec3(.58,.22,1.0);
  if(u_state>6.5){cyan=vec3(.65,.12,.14);violet=vec3(.45,.13,.22);}
  float edge=abs(r-radius);
@@ -49,6 +69,9 @@ void main(){
   color+=vec3(.25,.65,1.0)*northLight*.6;
  }
  float alpha=1.0-smoothstep(radius+.025,radius+.12,r);
+ vec4 rings=orbit(p,.445,1.1,-.55,cyan)+orbit(p,.46,1.3,.7,violet)+orbit(p,.475,1.0,2.1,vec3(.12,.8,.92));
+ color+=rings.rgb;
+ alpha=max(alpha,clamp(rings.a,0.0,1.0));
  gl_FragColor=vec4(color,alpha);
 }
 `;
