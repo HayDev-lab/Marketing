@@ -68,6 +68,14 @@ export function SignalCore({ className, state }: { className?: string; state?: C
   const coreState = useApp((s) => s.coreState);
 
   useEffect(() => {
+    const stage = canvasRef.current?.closest(".core-stage");
+    const sync = () => stage?.classList.toggle("signal-paused", document.hidden);
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
