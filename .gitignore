@@ -64,3 +64,5 @@ tool-results/
 /prisma/dev.db*
 /AGENTS.md
 /CLAUDE.md
+
+!.env.example

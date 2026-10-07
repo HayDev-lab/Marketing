@@ -51,7 +51,7 @@ void main(){
   else { colA = neonRed; colB = neonViolet; speed = 3.0; pulse = 1.0; }         // ERROR
 
   float r = length(uv);
-  float breath = 0.55 + 0.06 * sin(t * speed) + 0.03 * pulse * sin(t * speed * 4.0);
+  float breath = 0.36 + 0.06 * sin(t * speed) + 0.03 * pulse * sin(t * speed * 4.0);
 
   // Core orb
   float core = smoothstep(breath + 0.02, breath - 0.02, r);
@@ -70,11 +70,15 @@ void main(){
 
   vec3 col = mix(colA, colB, clamp(0.5 + 0.5 * sin(t * 0.4), 0.0, 1.0));
   vec3 result = vec3(0.02, 0.015, 0.045);
-  result += col * core * (0.85 + 0.15 * pulse);
+  float sphereZ = sqrt(max(0.0, 1.0 - dot(uv / breath, uv / breath)));
+  float edgeLight = pow(1.0 - sphereZ, 2.5);
+  float surfaceNoise = noise(uv * 34.0 + vec2(t * 0.035, 0.0));
+  result += core * (col * (0.08 + edgeLight * 0.9) + vec3(0.05, 0.13, 0.28) * sphereZ);
+  result += core * step(0.84, surfaceNoise) * vec3(0.18, 0.3, 0.48);
   result += col * halo;
   result += col * ringsOut * 0.8;
   result += col * filaments * 0.35;
-  result += vec3(0.9, 0.95, 1.0) * pow(smoothstep(breath - 0.01, breath - 0.045, r), 2.0) * 0.35;
+  result += core * vec3(0.22, 0.32, 0.55) * pow(max(0.0, dot(normalize(vec3(uv, sphereZ)), normalize(vec3(-0.4, 0.6, 0.7)))), 12.0);
 
   // Vignette
   result *= 1.0 - 0.55 * smoothstep(0.4, 1.1, r);

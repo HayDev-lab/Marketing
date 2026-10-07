@@ -3,10 +3,10 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useApp, type ViewId } from "@/lib/store";
 import { api, useI18n, setStoredSessionToken } from "@/lib/use-i18n";
-import { Home, Plus, Radar, CalendarDays, Send, BarChart3, Settings, LogOut, Bot, Search } from "lucide-react";
+import { Home, Plus, Radar, CalendarDays, Send, BarChart3, Settings, LogOut, Bot } from "lucide-react";
 import { WorkspaceBoundary } from "@/components/signal-os/error-boundary";
 import { CREATIVE_VIEWS, CreateWorkspace } from "@/components/signal-os/workspace";
-import { CommandPalette, openCommandPalette } from "@/components/command-palette";
+import { CommandPalette } from "@/components/command-palette";
 import { BatchWorkerChip } from "@/components/batch-worker-chip";
 import { OnboardingTour } from "@/components/onboarding-tour";
 const HomeScreen = dynamic(() => import("@/components/signal-os/home").then(m => m.SignalHome));
@@ -80,7 +80,7 @@ export function AppShell({ brands, onBrandsChanged }: {
  <div className="os-body"><header className="os-topbar"><select data-tour="brand" aria-label={t("nav.brands")} value={brand ?? ""} onChange={e => e.target.value === "__new" ? setView("brands") : setBrand(e.target.value)}><option value="">{t("dash.noBrand")}</option>{brands.map(b => <option value={b.id} key={b.id}>{b.name}</option>)}<option value="__new">+ {t("nav.brands")}</option></select>
  <div className="mode-switch" data-tour="mode" role="group" aria-label={t("signal.mode")}>{(["manual", "autopilot"] as const).map(m => <button disabled={busy} aria-pressed={mode === m} key={m} onClick={() => void changeMode(m)}>{t(`mode.${m}`)}</button>)}</div>
  <button className="credit-button" onClick={() => setView("settings")} aria-label={t("signal.credits")}>{credits === null ? "—" : new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(credits)} <span>{t("signal.credits")}</span></button>
- <button className="jobs-button" aria-live="polite" onClick={() => setView("autopilot")}><span className="live-dot"/>{active.length} <span>{t("signal.jobs")}</span></button><button className="top-icon" onClick={openCommandPalette} aria-label={t("cmd.title")}><Search size={18}/></button><button className="profile-button" aria-label={t("signal.account")} title={user?.email} onClick={() => setView("settings")}>{(user?.name ?? user?.email ?? "H").slice(0, 1).toUpperCase()}</button><button className="top-icon" aria-label={t("auth.logout")} onClick={async () => { try {
+ <button className="jobs-button" aria-live="polite" onClick={() => setView("autopilot")}><span className="live-dot"/>{active.length} <span>{t("signal.jobs")}</span></button><button className="profile-button" aria-label={t("signal.account")} title={user?.email} onClick={() => setView("settings")}>{(user?.name ?? user?.email ?? "H").slice(0, 1).toUpperCase()}</button><button className="top-icon" aria-label={t("auth.logout")} onClick={async () => { try {
         await api("/api/auth", { method: "POST", body: JSON.stringify({ action: "logout" }) });
         setStoredSessionToken(null);
         window.location.reload();

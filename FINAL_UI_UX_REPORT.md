@@ -80,3 +80,10 @@ Browser localhost is unreachable; external provider credentials, avatar implemen
 
 BLOCKED — full redesign acceptance and Golden Path are not met. Next actions: complete editor/planner/metadata UX, supply reachable preview, configure real providers/social accounts, run responsive/visual/a11y and failure E2E gates.
 
+
+## Reference alignment follow-up — 2026-10-07
+Home now renders an owner-scoped media shelf, a real draft awaiting review, navigable orbit nodes and a shaded signal sphere. Dock captions are persistent. Video workspace has scene assets, synchronized preview selection, duration-based scene strip, playable real voice clips and actual subtitle cues. Existing full scene retry/prompt and assembly controls are retained below the compact workspace. Timeline is a navigation/preview surface, not a frame-accurate non-linear editor; it does not claim drag trimming or waveform measurement.
+
+Server-only OpenRouter and Google Gemini text adapters are available with blank API/model slots in `.env.example`. Settings reports configuration without claiming live success. See CLOUD_API_SETUP.md. TTS/video/image integrations are not implied by a text API key.
+
+Final status remains BLOCKED pending real browser visual comparison, live external provider verification and the previously documented Golden Path gaps. No claim of pixel-perfect or production completion.

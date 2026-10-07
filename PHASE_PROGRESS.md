@@ -361,3 +361,14 @@ MOCKS REMAINING:
 NEXT ACTION:
 - Resolve phase-specific limitation and run the corresponding acceptance gate.
 
+
+PHASE: Reference alignment + cloud API slots
+STATUS: PARTIAL
+IMPLEMENTED: media previews; live review card; orbit destinations; scene assets/timeline; server-only OpenRouter/Gemini text routing; blank env slots; honest connection metadata.
+FILES CHANGED: Home, shell, core, video workspace, CSS, HY/RU/EN dictionary, cloud adapter/API/settings, .env.example and reports.
+TESTS: TypeScript, scoped ESLint, cloud simulated contract tests, six Signal OS regression tests; production build and smoke rerun.
+PASSED: TypeScript, scoped ESLint, cloud contracts, dictionary parity, calendar and contrast tests.
+FAILED: None in completed checks.
+KNOWN LIMITATIONS: Browser visual QA and paid/live Golden Path not certified; advanced timeline editing and separate Gemini TTS remain outstanding.
+MOCKS REMAINING: No mock content introduced; cloud test responses are explicitly simulated tests.
+NEXT ACTION: Finish production/smoke validation; connect server credentials and run actual visual/provider Golden Path.
