@@ -1,0 +1,3 @@
+"use client";
+/** Decorative layered monogram; electricity is clipped to the letter silhouette. */
+export function ElectricMonogram(){return <div className="electric-monogram" aria-hidden="true"><span className="electric-depth">H</span><span className="electric-face">H</span><svg className="electric-current" viewBox="0 0 120 140" focusable="false"><defs><clipPath id="signal-h-current"><path d="M16 14H42V57H78V14H104V126H78V83H42V126H16Z"/></clipPath></defs><g clipPath="url(#signal-h-current)"><path className="current-a" d="M24 0L32 23L21 38L39 54L30 66L52 71L67 62L86 75L96 97L84 116L96 143"/><path className="current-b" d="M96 -8L82 23L99 42L80 64L60 78L40 69L20 91L36 113L22 148"/></g></svg></div>;}

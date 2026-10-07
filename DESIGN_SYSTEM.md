@@ -6,3 +6,6 @@ Geist / Noto Sans Armenian / system sans. Body 14–16px; metadata 11–12px; he
 Desktop dock 80px, utility header 76px. Tablet navigation at top (768–1023px), phone dock at bottom (<768px), mobile header wraps. Workspace max 1600px. Two-column Home and Settings collapse on phone. Studio tabs wrap. Asset grid auto-fills. Dialog maximum height 85dvh, scrolling enabled. Safe-area bottom padding.
 
 Focus outline 2px #A78BFA, skip link to workspace, named icon buttons, aria-current / aria-pressed, polite job announcements, keyboard-native selects. Reduced motion disables animation; mobile and reduced motion do not initialize a WebGL context. Rendered contrast and screen-reader testing still require browser QA.
+
+## Glass and electric core update
+All workspace cards and buttons use `rgba(17,23,34,0.8)`: 20% transparency. Text opacity stays at 100%; 18px backdrop blur and inset highlights provide glass depth. Primary, active and destructive glass surfaces retain semantic tints. The core uses brighter cyan/violet atmospheric glow. Its H has layered depth, a metallic gradient face and clipped SVG electric currents with a slow continuous dash animation; reduced-motion disables that animation. No rapid flashing is used.

@@ -1583,3 +1583,29 @@ select option{
 .node-1 span,.node-3 span{border-color:#965aee;background:#eee2ff;box-shadow:0 0 6px #a56aff,0 0 20px #8b5cf670}
 .core-caption{z-index:5;bottom:0}.core-caption:before{content:"";display:inline-block;width:7px;height:7px;margin-right:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e80}
 @media(max-width:767px){.core-monogram{font-size:30px}.signal-node{font-size:8px;gap:5px}.signal-node span{width:11px;height:11px;border-width:3px}.node-1{max-width:80px}.core-stage{height:auto;aspect-ratio:1;width:230px}.core-caption{bottom:-5px}}
+/* Glass surfaces: 20% transparent (80% opaque); text remains fully opaque. */
+:root{--signal-glass:rgba(17,23,34,.8);--signal-glass-border:rgba(226,232,255,.22);--signal-glass-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -1px 0 rgba(255,255,255,.035),0 8px 24px rgba(0,0,0,.22)}
+.signal-os :is([data-slot="card"],.glass,.glass-strong,.os-panel,.work-list,.job-stream,.creative-composer,.project-thumbnail,.review-project){background:var(--signal-glass)!important;border:1px solid var(--signal-glass-border);backdrop-filter:blur(18px) saturate(135%);-webkit-backdrop-filter:blur(18px) saturate(135%);box-shadow:var(--signal-glass-shadow)}
+.signal-os button{background-color:var(--signal-glass);border:1px solid var(--signal-glass-border);backdrop-filter:blur(18px) saturate(135%);-webkit-backdrop-filter:blur(18px) saturate(135%);box-shadow:var(--signal-glass-shadow);transition:background-color .2s,border-color .2s,box-shadow .2s}
+.signal-os button:hover:not(:disabled){background-color:rgba(31,39,56,.8);border-color:#c4b5fd66;box-shadow:inset 0 1px 0 #ffffff29,0 0 16px #8b5cf620}
+.signal-os button:is(.os-primary,[data-variant="default"]){background:rgba(91,48,184,.8);color:#f4f7fb;border-color:#c4b5fd70}
+.signal-os button[aria-current],.signal-os button[aria-pressed=true],.signal-os button[data-state=active]{background-color:rgba(75,47,126,.8);border-color:#b794ff99;color:#f4f7fb}
+.signal-os button:disabled{cursor:not-allowed;color:#8d98a8}
+.signal-os button:is(.os-stop,[data-variant="destructive"]){background-color:rgba(100,27,39,.8);border-color:#ef444470}
+.signal-os .os-dock button{border-radius:10px}.signal-os .os-mark{min-width:44px;min-height:44px}
+.signal-os .home-activity header button{padding:6px 8px;border-radius:7px}
+.signal-os .signal-node{padding:6px 8px;border-radius:12px;font-size:10px;min-width:52px;max-width:125px}
+.core-stage:before{content:"";position:absolute;inset:6%;border-radius:50%;background:radial-gradient(ellipse at 28% 45%,#22d3ee36,transparent 64%),radial-gradient(ellipse at 77% 46%,#8b5cf64d,transparent 65%);filter:blur(22px);pointer-events:none;z-index:0}
+.signal-static-orb{box-shadow:inset -14px 6px 26px #8b5cf66b,inset 8px 10px 28px #22d3ee55,inset 0 0 7px #dbeafecc,0 0 7px #99b6ffcc,0 0 26px #8b5cf670,0 0 52px #22d3ee35}
+.signal-gl-canvas{filter:drop-shadow(0 0 10px #22d3ee70) drop-shadow(0 0 24px #8b5cf655)}
+.signal-orbits i{border-color:#38bdf8bb;box-shadow:0 0 8px #22d3ee40}.signal-orbits i:nth-child(2){border-color:#a78bfabb;box-shadow:0 0 10px #8b5cf64d}
+.electric-monogram{position:relative;width:95px;height:112px;transform:perspective(500px) rotateY(-15deg) rotateX(7deg);pointer-events:none;isolation:isolate}
+.electric-monogram>span{position:absolute;inset:0;font-family:Arial,sans-serif;font-size:112px;line-height:1;font-weight:900;display:grid;place-items:center;letter-spacing:-7px}
+.electric-depth{color:#49228f;transform:translate(7px,5px);text-shadow:1px 1px #663ab4,2px 2px #663ab4,3px 3px #552e98,4px 4px #422774,8px 10px 15px #030713bb}
+.electric-face{background:linear-gradient(130deg,#d5f7ff 4%,#6bcbff 25%,#8b5cf6 52%,#d4b8ff 68%,#7651d0 87%);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 0 5px #22d3eecc) drop-shadow(0 0 18px #8b5cf699)}
+.electric-current{position:absolute;inset:0;width:100%;height:100%;filter:drop-shadow(0 0 3px #22d3ee) drop-shadow(0 0 8px #8b5cf6)}
+.electric-current path{fill:none;stroke:#e0faff;stroke-width:2;stroke-linecap:round;stroke-dasharray:12 32;animation:signal-current-flow 3.8s linear infinite}
+.electric-current .current-b{stroke:#b5b9ff;stroke-width:1.5;stroke-dasharray:8 38;animation-direction:reverse;animation-duration:5.2s}
+@keyframes signal-current-flow{from{stroke-dashoffset:176}to{stroke-dashoffset:0}}
+@media(max-width:767px){.electric-monogram{width:61px;height:72px}.electric-monogram>span{font-size:72px}.signal-os .signal-node{font-size:8px;padding:3px 5px;max-width:95px;min-width:42px}.core-stage:before{filter:blur(14px)}.signal-os .os-dock nav button{border-radius:8px}}
+@media(prefers-reduced-motion:reduce){.electric-current path{animation:none!important;stroke-dasharray:10 44}.electric-monogram{transform:none}.core-stage:before{filter:none}}
