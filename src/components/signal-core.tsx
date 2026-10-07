@@ -173,7 +173,7 @@ export function SignalCore({ className, state }: { className?: string; state?: C
   return (
     <div className={`relative overflow-hidden ${className ?? ""}`} aria-hidden="true">
       {/* static fallback under the canvas */}
-      
+
       <div className="signal-static-orb"/><canvas ref={canvasRef} className="signal-gl-canvas absolute inset-0 h-full w-full" />
     </div>
   );
