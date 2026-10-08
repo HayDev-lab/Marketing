@@ -1,12 +1,13 @@
+import { googleImage, googleTts, googleVideoSubmit, googleVideoPoll, googleVideoDownload } from "./google-media";
 import { cloudComplete } from "./cloud";
 // Z.AI cloud adapter — implements the unified contract against z-ai-web-dev-sdk.
 import ZAI from "z-ai-web-dev-sdk";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, readFile } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
 import { getProvider, type HealthResult } from "@/lib/ai/registry";
 
-export const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+export const UPLOADS_DIR = process.env.VERCEL ? "/tmp/haydev-uploads" : path.join(process.cwd(), "uploads");
 
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
 
@@ -25,11 +26,13 @@ export async function saveAssetBuffer(
   filename: string,
   meta?: Record<string, unknown>
 ) {
+  if (buffer.length > 25 * 1024 * 1024) throw new Error("Asset exceeds 25 MB storage limit");
   await mkdir(UPLOADS_DIR, { recursive: true });
   const key = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}.${filename.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
   await writeFile(path.join(UPLOADS_DIR, key), buffer);
   const asset = await db.mediaAsset.create({
     data: {
+      payload: { create: { data: new Uint8Array(buffer) } },
       userId,
       kind,
       filename,
@@ -51,6 +54,18 @@ export async function saveAssetBase64(
   meta?: Record<string, unknown>
 ) {
   return saveAssetBuffer(userId, Buffer.from(base64, "base64"), kind, mimeType, filename, meta);
+}
+
+export async function readAssetBuffer(asset: { id: string; storageKey: string }) {
+  const payload = await db.mediaPayload.findUnique({ where: { assetId: asset.id } });
+  if (payload) return Buffer.from(payload.data);
+  return readFile(path.join(UPLOADS_DIR, asset.storageKey));
+}
+export async function materializeAsset(asset: { id: string; storageKey: string }) {
+  await mkdir(UPLOADS_DIR, { recursive: true });
+  const file = path.join(UPLOADS_DIR, path.basename(asset.storageKey));
+  await writeFile(file, await readAssetBuffer(asset));
+  return file;
 }
 
 // ---------- Health checks (runtime verification → LIVE_VERIFIED) ----------
@@ -174,7 +189,10 @@ export async function imageGenerate(opts: {
   prompt: string;
   aspectRatio?: string;
   referenceImageBase64?: string;
-}): Promise<{ base64: string }> {
+  referenceMimeType?: string;
+  provider?: string;
+}): Promise<{ base64: string; mimeType?: string }> {
+  if (opts.provider === "gemini-image") return googleImage(opts);
   const zai = await getZai();
   const size = sizeForAspect(opts.aspectRatio) as "1024x1024";
   if (opts.referenceImageBase64) {
@@ -203,7 +221,7 @@ const VIDEO_SIZE: Record<string, string> = {
 
 // Provider contract: only these clip lengths are accepted (API rejects others
 // with "unsupported duration"). Shot plans are snapped to the nearest value.
-export const SUPPORTED_VIDEO_DURATIONS = [5, 10];
+export const SUPPORTED_VIDEO_DURATIONS = process.env.VIDEO_PROVIDER === "google" ? [4, 6, 8] : [5, 10];
 
 export function snapVideoDuration(sec: number): number {
   const n = Math.max(1, Math.round(Number(sec) || 5));
@@ -217,7 +235,9 @@ export async function videoSubmit(opts: {
   aspectRatio?: string;
   durationSec?: number;
   referenceImageUrl?: string;
+  provider?: string;
 }): Promise<{ providerJobId: string }> {
+  if (opts.provider === "gemini-video") return googleVideoSubmit(opts);
   const zai = await getZai();
   const size = VIDEO_SIZE[opts.aspectRatio ?? "9:16"] ?? "720x1280";
   const res = await zai.video.generations.create({
@@ -236,6 +256,7 @@ export async function videoPoll(providerJobId: string): Promise<{
   outputUrl?: string;
   error?: string;
 }> {
+  if (providerJobId.startsWith("google:")) return googleVideoPoll(providerJobId);
   const zai = await getZai();
   const res = await zai.async.result.query(providerJobId);
   const status = res?.task_status;
@@ -248,7 +269,8 @@ export async function videoPoll(providerJobId: string): Promise<{
   return { status: "PROCESSING" };
 }
 
-export async function downloadToBuffer(url: string): Promise<Buffer> {
+export async function downloadToBuffer(url: string, provider?: string): Promise<Buffer> {
+  if (provider === "gemini-video") return googleVideoDownload(url);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download asset: HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
@@ -260,7 +282,9 @@ export async function ttsGenerate(opts: {
   text: string;
   voice?: string;
   speed?: number;
+  provider?: string;
 }): Promise<{ base64: string; mimeType: string }> {
+  if (opts.provider === "gemini-tts" || (!opts.provider && process.env.TTS_PROVIDER === "google")) return googleTts(opts);
   const zai = await getZai();
   // SDK returns the raw Response object for TTS (caller parses body itself).
   // NOTE: provider rejects custom response_format (err 1214) — omit it.

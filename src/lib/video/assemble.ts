@@ -26,7 +26,7 @@ import { db } from "@/lib/db";
 import { ApiError } from "@/lib/api";
 import { audit } from "@/lib/ledger";
 import { jobs } from "@/lib/jobs";
-import { UPLOADS_DIR, saveAssetBuffer } from "@/lib/ai/zai";
+import { UPLOADS_DIR, saveAssetBuffer, materializeAsset } from "@/lib/ai/zai";
 
 const execFileAsync = promisify(execFile);
 
@@ -162,7 +162,7 @@ export async function runAssemblyJob(jobId: string) {
     if (!entry.assetId) throw new ApiError(409, "NO_SOUNDTRACK", "Selected soundtrack has no audio file (lyrics-only entry)");
     const asset = await db.mediaAsset.findUnique({ where: { id: entry.assetId } });
     if (!asset) throw new ApiError(404, "NO_SOUNDTRACK", "Soundtrack media asset missing");
-    musicFile = path.join(UPLOADS_DIR, asset.storageKey);
+    musicFile = await materializeAsset(asset);
     edit = { ...edit, ...parseEdit(entry.metaJson) };
     if (typeof soundtrack.loopOverride === "boolean") edit.loop = soundtrack.loopOverride;
   }
@@ -179,7 +179,7 @@ export async function runAssemblyJob(jobId: string) {
     for (const scene of ready) {
       const media = await db.mediaAsset.findUnique({ where: { id: scene.assetId! } });
       if (!media) throw new ApiError(404, "SOURCE_MISSING", `Scene ${scene.order + 1} media asset missing`);
-      const file = path.join(UPLOADS_DIR, media.storageKey);
+      const file = await materializeAsset(media);
       await probeMedia(file); // honest early failure per scene
       const out = path.join(tmp, `norm_${scene.order}_${normFiles.length}.mp4`);
       await run("ffmpeg", [
@@ -246,7 +246,7 @@ export async function runAssemblyJob(jobId: string) {
       }
       if (voiceover?.assetId && voiceover.enabled !== false) {
         const voAsset = await db.mediaAsset.findUnique({ where: { id: voiceover.assetId } });
-        if (voAsset) voiceFile = path.join(UPLOADS_DIR, voAsset.storageKey);
+        if (voAsset) voiceFile = await materializeAsset(voAsset);
         else voiceMissing = true; // honest: narration asset deleted from library — proceed without it
       }
     }
@@ -257,7 +257,7 @@ export async function runAssemblyJob(jobId: string) {
     if (perSceneActive) {
       for (const v of sceneVoices) {
         const asset = await db.mediaAsset.findUnique({ where: { id: v.assetId } });
-        if (asset) sceneVoiceFiles.push({ voice: v, file: path.join(UPLOADS_DIR, asset.storageKey) });
+        if (asset) sceneVoiceFiles.push({ voice: v, file: await materializeAsset(asset) });
         else sceneVoicesMissing += 1;
       }
       if (sceneVoiceFiles.length === 0) {

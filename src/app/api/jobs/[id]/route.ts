@@ -68,3 +68,5 @@ async function updateScene(id: string, data: Record<string, unknown>) {
   const { db } = await import("@/lib/db");
   return db.videoScene.update({ where: { id }, data: data as never });
 }
+
+export const maxDuration = 180;

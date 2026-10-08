@@ -6,7 +6,7 @@ import { audit, ledger } from "@/lib/ledger";
 import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
-import { videoSubmit, llmCompleteJson, snapVideoDuration, ttsGenerate, saveAssetBase64, UPLOADS_DIR } from "@/lib/ai/zai";
+import { videoSubmit, llmCompleteJson, snapVideoDuration, ttsGenerate, saveAssetBase64, UPLOADS_DIR, materializeAsset } from "@/lib/ai/zai";
 import { kickAssembly, probeMedia } from "@/lib/video/assemble";
 import { assertRouteAllowed } from "@/lib/ai/system-config";
 
@@ -40,11 +40,12 @@ export async function POST(req: NextRequest) {
       if (!route) throw new ApiError(503, "NO_PROVIDER", "No video provider available");
       await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
       const model = getProviderModel(route.providerId, route.modelId);
-      const estimatedCost = model?.estimatedCostPerCall ?? 0.1;
+      const submitDuration = snapVideoDuration(scene.durationSec);
+      const estimatedCost = route.providerId === "gemini-video" ? submitDuration * 0.05 : model?.estimatedCostPerCall ?? 0.1;
       await assertQuota(user.id, "VIDEO_GENERATION", estimatedCost, { videoDurationSec: Math.ceil(scene.durationSec) });
       await ledger.assertBudget(user.id, estimatedCost);
 
-      const { job } = await jobs.create({
+      const { job, deduplicated } = await jobs.create({
         userId: user.id,
         kind: "VIDEO",
         provider: route.providerId,
@@ -57,13 +58,14 @@ export async function POST(req: NextRequest) {
         return ok({ jobId: job.id, assetId: job.resultAssetId, deduplicated: true });
       }
 
+      if (deduplicated) return ok({ jobId: job.id, status: job.status, deduplicated: true });
+
       // Continuity: semantic (character+style bibles appended); provider continuation honestly unsupported here
       const continuityContext = Object.keys(characterBible).length || Object.keys(styleBible).length
         ? `\n\nCharacter Bible: ${JSON.stringify(characterBible)}\nStyle Bible: ${JSON.stringify(styleBible)}`
         : "";
       // Snap the scene to a provider-supported clip length; keep the row honest
       // (the stored duration must equal the clip the provider actually renders).
-      const submitDuration = snapVideoDuration(scene.durationSec);
       if (submitDuration !== scene.durationSec) {
         await db.videoScene.update({ where: { id: scene.id }, data: { durationSec: submitDuration } });
       }
@@ -73,6 +75,7 @@ export async function POST(req: NextRequest) {
           prompt: scene.prompt + continuityContext,
           aspectRatio: project.aspectRatio,
           durationSec: submitDuration,
+          provider: route.providerId,
         });
         await jobs.markSubmitted(job.id, submitted.providerJobId);
         await db.videoScene.update({
@@ -84,7 +87,7 @@ export async function POST(req: NextRequest) {
         return ok({ jobId: job.id, providerJobId: submitted.providerJobId, sceneId: scene.id, routedBecause: route.reason });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Video submit failed";
-        await jobs.markFailed(job.id, message);
+        await jobs.markFailed(job.id, message, { needsUserAction: true });
         await db.videoScene.update({ where: { id: scene.id }, data: { status: "FAILED", error: message.slice(0, 500) } });
         throw new ApiError(502, "SUBMIT_FAILED", message, { jobId: job.id, canRetry: true });
       }
@@ -228,7 +231,8 @@ export async function POST(req: NextRequest) {
       const route = routeCapability({ capability: "TTS" });
       if (!route) throw new ApiError(503, "NO_PROVIDER", "No TTS provider available");
       await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
-      const estimatedCost = 0.005;
+      const estimatedCost = route.providerId === "gemini-tts" ? Math.max(0.005, text.length / 2000 * 0.06) : 0.005;
+      await ledger.assertBudget(user.id, estimatedCost);
       await assertQuota(user.id, "TTS", estimatedCost);
 
       const { job } = await jobs.create({
@@ -245,7 +249,7 @@ export async function POST(req: NextRequest) {
       }
       await jobs.markProcessing(job.id);
       try {
-        const result = await ttsGenerate({ text, voice, speed });
+        const result = await ttsGenerate({ text, voice, speed, provider: route.providerId });
         const asset = await saveAssetBase64(user.id, result.base64, "VOICE", result.mimeType, `voiceover_${project.id.slice(-6)}.mp3`, {
           projectId: project.id,
           voice,
@@ -282,7 +286,7 @@ export async function POST(req: NextRequest) {
         return ok({ jobId: job.id, assetId: asset.id, url: `/api/assets/${asset.id}/raw`, chars: text.length, textSource });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Voiceover TTS failed";
-        await jobs.markFailed(job.id, message);
+        await jobs.markFailed(job.id, message, { needsUserAction: true });
         throw new ApiError(502, "GENERATION_FAILED", message, { jobId: job.id, canRetry: true });
       }
     }
@@ -308,7 +312,8 @@ export async function POST(req: NextRequest) {
       const route = routeCapability({ capability: "TTS" });
       if (!route) throw new ApiError(503, "NO_PROVIDER", "No TTS provider available");
       await assertRouteAllowed({ providerId: route.providerId, modelId: route.modelId }, user.id);
-      const estimatedCost = 0.005;
+      const estimatedCost = route.providerId === "gemini-tts" ? Math.max(0.005, text.length / 2000 * 0.06) : 0.005;
+      await ledger.assertBudget(user.id, estimatedCost);
       await assertQuota(user.id, "TTS", estimatedCost);
 
       const { job } = await jobs.create({
@@ -325,7 +330,7 @@ export async function POST(req: NextRequest) {
       }
       await jobs.markProcessing(job.id);
       try {
-        const result = await ttsGenerate({ text, voice, speed });
+        const result = await ttsGenerate({ text, voice, speed, provider: route.providerId });
         const asset = await saveAssetBase64(user.id, result.base64, "VOICE", result.mimeType, `scene_voice_${scene.order + 1}_${scene.id.slice(-6)}.mp3`, {
           projectId: scene.projectId,
           sceneId: scene.id,
@@ -340,7 +345,7 @@ export async function POST(req: NextRequest) {
         try {
           const media = await db.mediaAsset.findUnique({ where: { id: asset.id } });
           if (media) {
-            const probe = await probeMedia(path.join(UPLOADS_DIR, media.storageKey));
+            const probe = await probeMedia(await materializeAsset(media));
             voiceDurationSec = Number(probe.durationSec.toFixed(2));
           }
         } catch {
@@ -361,7 +366,7 @@ export async function POST(req: NextRequest) {
         return ok({ jobId: job.id, assetId: asset.id, url: `/api/assets/${asset.id}/raw`, voiceDurationSec, chars: text.length, scene: updated });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Scene TTS failed";
-        await jobs.markFailed(job.id, message);
+        await jobs.markFailed(job.id, message, { needsUserAction: true });
         throw new ApiError(502, "GENERATION_FAILED", message, { jobId: job.id, canRetry: true });
       }
     }
@@ -373,3 +378,5 @@ export async function POST(req: NextRequest) {
 function brandTitle(body: Record<string, unknown>): string {
   return String(body.title ?? body.topic ?? "brand promo video");
 }
+
+export const maxDuration = 180;

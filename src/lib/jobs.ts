@@ -46,6 +46,7 @@ export const jobs = {
     // derived key; downstream trend dedupKey collapsing keeps data clean.
     if (input.idempotencyKey) {
       const existing = await db.generationJob.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+      if (existing && existing.userId !== input.userId) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "Idempotency key already used");
       const ACTIVE = ["DRAFT", "QUEUED", "SUBMITTED", "PROCESSING", "WAITING_PROVIDER", "RETRYING"];
       if (existing && ACTIVE.includes(existing.status)) return { job: existing, deduplicated: true };
       if (existing) {
@@ -158,12 +159,12 @@ export const jobs = {
     }
     // SUCCESS → download once (idempotent: only if no asset yet)
     if (job.resultAssetId) return db.generationJob.findUnique({ where: { id: jobId } });
-    const buf = await downloadToBuffer(poll.outputUrl!);
+    const buf = await downloadToBuffer(poll.outputUrl!, job.provider);
     const asset = await saveAssetBuffer(userId, buf, "VIDEO", "video/mp4", `video_${jobId}.mp4`, {
       providerJobId: job.providerJobId,
       provider: job.provider,
     });
-    const done = await this.markCompleted(jobId, { videoUrl: `/api/assets/${asset.id}/raw`, assetId: asset.id }, asset.id, 0.1);
+    const done = await this.markCompleted(jobId, { videoUrl: `/api/assets/${asset.id}/raw`, assetId: asset.id }, asset.id);
     await audit.log({
       userId,
       actorType: "SYSTEM",

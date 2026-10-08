@@ -30,7 +30,7 @@ export async function GET() {
         supportsHealthCheck: p.supportsHealthCheck,
         statusNote: p.statusNote,
         enabled: cfg?.enabled ?? platformDefault,
-        status: (cfg?.status ?? p.status) as ProviderStatus,
+        status: (p.providerId.startsWith("gemini-") ? p.status : cfg?.status ?? p.status) as ProviderStatus,
         defaultModel: cfg?.defaultModel ?? p.defaultModel,
         lastHealthAt: cfg?.lastHealthAt,
         lastHealthOk: cfg?.lastHealthOk,

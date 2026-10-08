@@ -81,6 +81,23 @@ export interface ProviderJobStatusInfo {
 
 export const PROVIDER_REGISTRY: ProviderDescriptor[] = [
   {
+    providerId: "gemini-image", title: "Google Flash-Lite Image", category: "Image",
+    capabilities: ["IMAGE_GENERATION", "IMAGE_EDIT"],
+    models: [{ id: "gemini-3.1-flash-lite-image", title: "Flash-Lite Image (1K)", capabilities: ["IMAGE_GENERATION", "IMAGE_EDIT"], constraints: { aspectRatios: ["1:1", "9:16", "16:9", "3:4", "4:3", "2:1", "1:2"], referenceImage: true }, estimatedCostPerCall: 0.05, latencyClass: "medium" }],
+    status: "IMPLEMENTED_NOT_LIVE_VERIFIED", supportsHealthCheck: false, requiresExternalKey: true, statusNote: "Requires Google paid billing and image quota. No automatic upgrade or retry.", defaultModel: "gemini-3.1-flash-lite-image",
+  },
+  {
+    providerId: "gemini-tts", title: "Google Flash-Lite TTS", category: "TTS", capabilities: ["TTS"],
+    models: [{ id: "gemini-3.8-flash-lite-tts", title: "Flash-Lite TTS", capabilities: ["TTS"], constraints: { voices: ["Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr"], languages: ["ru", "en"], maxInputChars: 2000 }, latencyClass: "fast" }],
+    status: "IMPLEMENTED_NOT_LIVE_VERIFIED", supportsHealthCheck: false, requiresExternalKey: true, defaultModel: "gemini-3.8-flash-lite-tts",
+  },
+  {
+    providerId: "gemini-video", title: "Google Veo 3.1 Lite", category: "Video", capabilities: ["VIDEO_GENERATION"],
+    models: [{ id: "veo-3.1-lite-generate-preview", title: "Veo 3.1 Lite (720p)", capabilities: ["VIDEO_GENERATION"], constraints: { durationsSec: [4, 6, 8], aspectRatios: ["9:16", "16:9"], referenceImage: false, continuation: false }, estimatedCostPerCall: 0.2, latencyClass: "slow" }],
+    status: "IMPLEMENTED_NOT_LIVE_VERIFIED", supportsHealthCheck: false, requiresExternalKey: true, statusNote: "Requires Google paid billing and video quota. 720p, $0.05/second; no expensive fallback.", defaultModel: "veo-3.1-lite-generate-preview",
+  },
+
+  {
     providerId: "zai-core",
     title: "Z.AI Core (GLM)",
     category: "LLM",
@@ -190,17 +207,6 @@ export const PROVIDER_REGISTRY: ProviderDescriptor[] = [
     status: "IMPLEMENTED_NOT_LIVE_VERIFIED",
     supportsHealthCheck: false,
     defaultModel: "asr-v1",
-  },
-  {
-    providerId: "gemini-tts",
-    title: "Google Gemini TTS",
-    category: "TTS",
-    capabilities: ["TTS"],
-    models: [],
-    status: "BLOCKED_EXTERNAL",
-    statusNote: "No GOOGLE_API_KEY configured in this environment. Adapter interface ready; requires key to activate.",
-    requiresExternalKey: true,
-    supportsHealthCheck: false,
   },
   {
     providerId: "haydev-synth",
@@ -316,9 +322,12 @@ export interface RouteDecision {
 export function routeCapability(req: RouteRequest): RouteDecision | null {
   const candidates: { provider: ProviderDescriptor; model: ModelDescriptor; reason: string }[] = [];
   for (const provider of PROVIDER_REGISTRY) {
+    if (provider.providerId.startsWith("gemini-") && !(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY)) continue;
     if (provider.status === "DISABLED" || provider.status === "BLOCKED_EXTERNAL") continue;
     for (const model of provider.models) {
       if (!model.capabilities.includes(req.capability)) continue;
+      if (req.aspectRatio && model.constraints.aspectRatios && !model.constraints.aspectRatios.includes(req.aspectRatio)) continue;
+      if (req.referenceImage && !model.constraints.referenceImage) continue;
       const reasons: string[] = [];
       if (req.userPreferenceProvider === provider.providerId) reasons.push("user-selected provider");
       if (req.userPreferenceModel === model.id) reasons.push("user-selected model");

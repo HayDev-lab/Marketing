@@ -4,7 +4,7 @@ import { fail } from "@/lib/api";
 import { getCurrentUser, getUserFromToken } from "@/lib/auth";
 import { readFile } from "fs/promises";
 import path from "path";
-import { UPLOADS_DIR } from "@/lib/ai/zai";
+import { UPLOADS_DIR, readAssetBuffer } from "@/lib/ai/zai";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     const { id } = await params;
     const asset = await db.mediaAsset.findUnique({ where: { id } });
     if (!asset || asset.userId !== user.id) return fail(404, "NOT_FOUND", "Asset not found");
-    const buffer = await readFile(path.join(UPLOADS_DIR, asset.storageKey));
+    const buffer = await readAssetBuffer(asset);
     return new Response(new Uint8Array(buffer), {
       headers: {
         "Content-Type": asset.mimeType,

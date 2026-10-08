@@ -346,7 +346,8 @@ model MediaAsset {
   filename  String
   mimeType  String
   size      Int?
-  storageKey String  // path under /home/z/my-project/uploads
+  payload MediaPayload?
+  storageKey String  // durable payload key or legacy local path
   provider  String?
   metaJson  String?
   createdAt DateTime @default(now())
@@ -720,4 +721,10 @@ model McpToken {
   revoked       Boolean   @default(false)
   lastUsedAt    DateTime?
   createdAt     DateTime  @default(now())
+}
+
+model MediaPayload {
+  assetId String @id
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  data Bytes
 }

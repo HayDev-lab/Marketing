@@ -6,7 +6,7 @@ import { assertQuota } from "@/lib/subscription";
 import { jobs } from "@/lib/jobs";
 import { routeCapability, getProviderModel } from "@/lib/ai/registry";
 import { assertRouteAllowed } from "@/lib/ai/system-config";
-import { imageGenerate, saveAssetBase64, UPLOADS_DIR } from "@/lib/ai/zai";
+import { imageGenerate, saveAssetBase64, UPLOADS_DIR, readAssetBuffer } from "@/lib/ai/zai";
 import { readFile } from "fs/promises";
 import path from "path";
 
@@ -40,15 +40,17 @@ export async function POST(req: NextRequest) {
 
     // Reference image (never lost — stored + recorded)
     let refBase64: string | undefined;
+    let refMimeType: string | undefined;
     let refAssetId: string | null = null;
     if (body.refAssetId) {
       const asset = await db.mediaAsset.findUnique({ where: { id: String(body.refAssetId) } });
       if (!asset || asset.userId !== user.id) throw new ApiError(404, "ASSET_NOT_FOUND", "Reference asset not found");
       refAssetId = asset.id;
-      refBase64 = (await readFile(path.join(UPLOADS_DIR, asset.storageKey))).toString("base64");
+      refMimeType = asset.mimeType;
+      refBase64 = (await readAssetBuffer(asset)).toString("base64");
     }
 
-    const { job } = await jobs.create({
+    const { job, deduplicated } = await jobs.create({
       userId: user.id,
       kind: "IMAGE",
       provider: route.providerId,
@@ -63,11 +65,12 @@ export async function POST(req: NextRequest) {
       return ok({ jobId: job.id, assetId: job.resultAssetId, deduplicated: true });
     }
 
+    if (deduplicated) return ok({ jobId: job.id, status: job.status, deduplicated: true });
     await jobs.markProcessing(job.id);
     const started = Date.now();
     try {
-      const result = await imageGenerate({ prompt, aspectRatio, referenceImageBase64: refBase64 });
-      const asset = await saveAssetBase64(user.id, result.base64, "IMAGE", "image/png", `img_${job.id.slice(-6)}.png`, {
+      const result = await imageGenerate({ prompt, aspectRatio, referenceImageBase64: refBase64, referenceMimeType: refMimeType, provider: route.providerId });
+      const asset = await saveAssetBase64(user.id, result.base64, "IMAGE", result.mimeType || "image/png", `img_${job.id.slice(-6)}.png`, {
         provider: route.providerId,
         model: route.modelId,
       });
@@ -100,8 +103,10 @@ export async function POST(req: NextRequest) {
       return ok({ jobId: job.id, assetId: asset.id, url: `/api/assets/${asset.id}/raw`, provider: route.providerId, model: route.modelId, routedBecause: route.reason });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Image generation failed";
-      await jobs.markFailed(job.id, message);
+      await jobs.markFailed(job.id, message, { needsUserAction: true });
       throw new ApiError(502, "GENERATION_FAILED", message, { jobId: job.id, canRetry: true });
     }
   });
 }
+
+export const maxDuration = 180;
